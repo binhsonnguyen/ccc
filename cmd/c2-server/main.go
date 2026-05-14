@@ -29,14 +29,15 @@ import (
 	"c2/core"
 	"c2/core/usecase"
 	"c2/internal/ptymgr"
+	"c2/internal/webdev"
 
 	"github.com/coder/websocket"
 )
 
 var (
-	store    = archivejson.New()
-	manager  = ptymgr.New()
-	indexDir string // path to web/dev served at /
+	store   = archivejson.New()
+	manager = ptymgr.New()
+	webFS   = webdev.FS()
 )
 
 // portFileCleanup is installed by run() once the discovery file exists,
@@ -89,13 +90,6 @@ func run() error {
 	cleanupPortFile := func() { _ = os.Remove(portFile) }
 	portFileCleanup = cleanupPortFile // for the top-level panic recover in main
 	defer cleanupPortFile()
-
-	// 3. Locate the dev HTML directory. Search a few likely roots so the
-	//    server works in `go run`, after `go install`, and during tests.
-	indexDir = findWebDevDir()
-	if indexDir == "" {
-		fmt.Fprintln(os.Stderr, "c2-server: warn: web/dev not found; / will 404")
-	}
 
 	originHost := fmt.Sprintf("127.0.0.1:%d", port)
 	originHostAlt := fmt.Sprintf("localhost:%d", port)
@@ -293,57 +287,23 @@ func handleControl(sess *ptymgr.Session, conn *websocket.Conn, data []byte) {
 // Static
 // ---------------------------------------------------------------------------
 
+// assetsHandler serves the embedded webdev FS at / and /assets/*.
+// The whole subtree (index.html plus any future assets) ships inside
+// the binary via internal/webdev/embed.go.
+var assetsHandler = http.FileServer(http.FS(webFS))
+
 func handleIndex(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
 		http.NotFound(w, r)
 		return
 	}
-	if indexDir == "" {
-		http.Error(w, "web/dev not bundled with this build", http.StatusNotFound)
-		return
-	}
-	http.ServeFile(w, r, filepath.Join(indexDir, "index.html"))
+	assetsHandler.ServeHTTP(w, r)
 }
 
 func handleAssets(w http.ResponseWriter, r *http.Request) {
-	if indexDir == "" {
-		http.NotFound(w, r)
-		return
-	}
-	// Strip /assets/ prefix and serve from web/dev/assets.
-	rel := strings.TrimPrefix(r.URL.Path, "/assets/")
-	if strings.Contains(rel, "..") {
-		http.Error(w, "bad path", http.StatusBadRequest)
-		return
-	}
-	http.ServeFile(w, r, filepath.Join(indexDir, "assets", rel))
-}
-
-// findWebDevDir walks up from the executable + cwd to locate web/dev/.
-// Handles `go run`, `go install`, and `cd cmd/c2-server && ./c2-server`.
-func findWebDevDir() string {
-	candidates := []string{}
-	if exe, err := os.Executable(); err == nil {
-		candidates = append(candidates, filepath.Dir(exe))
-	}
-	if wd, err := os.Getwd(); err == nil {
-		candidates = append(candidates, wd)
-	}
-	for _, start := range candidates {
-		dir := start
-		for i := 0; i < 6; i++ {
-			p := filepath.Join(dir, "web", "dev")
-			if st, err := os.Stat(p); err == nil && st.IsDir() {
-				return p
-			}
-			parent := filepath.Dir(dir)
-			if parent == dir {
-				break
-			}
-			dir = parent
-		}
-	}
-	return ""
+	// http.FileServer expects the request path to be the FS path; ours
+	// already starts with /assets/ which matches the on-disk layout.
+	assetsHandler.ServeHTTP(w, r)
 }
 
 // ---------------------------------------------------------------------------
