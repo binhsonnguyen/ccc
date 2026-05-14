@@ -1,5 +1,6 @@
 # Build output
 /c2-bin
+/c2-server
 
 # Go
 *.test
