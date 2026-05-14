@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 
 	"c2/adapters/archivejson"
 	"c2/adapters/claudefs"
@@ -278,7 +280,43 @@ func cmdRemove(args []string) error {
 		return err
 	}
 	fmt.Fprintf(os.Stderr, "c2: removed %s (%s)\n", args[0], removedName)
+	if serverIsAlive() {
+		fmt.Fprintln(os.Stderr,
+			"c2: note: c2-server is running. Any live PTY for this session "+
+				"keeps running there until you close its tab in the GUI or "+
+				"restart the server.")
+	}
 	return nil
+}
+
+// serverIsAlive reports whether ~/.local/share/cc/server.port points at a
+// running c2-server. Best-effort; returns false on any error.
+func serverIsAlive() bool {
+	dir := os.Getenv("XDG_DATA_HOME")
+	if dir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return false
+		}
+		dir = filepath.Join(home, ".local", "share")
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "cc", "server.port"))
+	if err != nil {
+		return false
+	}
+	lines := strings.SplitN(strings.TrimSpace(string(b)), "\n", 2)
+	if len(lines) < 2 {
+		return false
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(lines[1]))
+	if err != nil {
+		return false
+	}
+	p, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	return p.Signal(syscall.Signal(0)) == nil
 }
 
 // cmdPickerAction is invoked by fzf's `reload` binding. It mutates the

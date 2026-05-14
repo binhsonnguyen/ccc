@@ -185,6 +185,9 @@ func routeSession(originHost, originHostAlt string) http.HandlerFunc {
 		case "":
 			handleSessionGet(w, r, id)
 		case "archive":
+			if !checkSameOrigin(w, r, originHost, originHostAlt) {
+				return
+			}
 			handleSessionArchive(w, r, id)
 		case "pty":
 			handleSessionPTY(w, r, id, originHost, originHostAlt)
@@ -192,6 +195,27 @@ func routeSession(originHost, originHostAlt string) http.HandlerFunc {
 			http.NotFound(w, r)
 		}
 	}
+}
+
+// checkSameOrigin guards state-changing REST routes against cross-origin
+// drive-by POST. Loopback binding alone doesn't help here: any page the
+// user opens in the same browser can `fetch('http://127.0.0.1:PORT/...',
+// {method:'POST', mode:'no-cors'})` and the request goes through. We
+// require Origin to match one of our advertised hosts; missing Origin
+// (curl, non-browser clients) is also allowed because they don't have
+// the CSRF surface.
+func checkSameOrigin(w http.ResponseWriter, r *http.Request, originHost, originHostAlt string) bool {
+	o := r.Header.Get("Origin")
+	if o == "" {
+		return true
+	}
+	want1 := "http://" + originHost
+	want2 := "http://" + originHostAlt
+	if o == want1 || o == want2 {
+		return true
+	}
+	http.Error(w, "cross-origin not allowed", http.StatusForbidden)
+	return false
 }
 
 func handleSessionGet(w http.ResponseWriter, r *http.Request, id string) {
@@ -257,6 +281,12 @@ func handleSessionPTY(w http.ResponseWriter, r *http.Request, id, originHost, or
 	}
 	// Per coder/websocket: must call CloseNow on exit if not gracefully closed.
 	defer conn.CloseNow()
+
+	// Bound each frame to 64 KB. Stdin from a keyboard is tiny; control
+	// frames are small JSON; this protects against a misbehaving client
+	// (or a compromised same-browser tab past the origin check) flooding
+	// memory before WriteStdin pushes back on the PTY.
+	conn.SetReadLimit(64 * 1024)
 
 	client := newWSClient(conn)
 	sess, err := manager.Attach(e.ClaudeUUID, e.CWD, client)

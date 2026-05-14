@@ -87,7 +87,10 @@ func spawnDetached(exe string) error {
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
 		return err
 	}
-	logf, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	// 0600: this captures c2-server stderr including anything claude
+	// happens to print to its own stderr. Owner-only is safer than the
+	// default world-readable bits in case a token fragment ever leaks.
+	logf, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return err
 	}

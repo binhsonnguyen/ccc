@@ -12,6 +12,10 @@ echo "› building c2-bin"
 (cd "$repo" && go build -o "$bin_dir/c2-bin" ./cmd/c2-bin)
 echo "› installed: $bin_dir/c2-bin"
 
+echo "› building c2-server"
+(cd "$repo" && go build -o "$bin_dir/c2-server" ./cmd/c2-server)
+echo "› installed: $bin_dir/c2-server"
+
 case ":$PATH:" in
     *":$bin_dir:"*) ;;
     *) echo "! $bin_dir is not in PATH — add it to your shell rc" ;;
