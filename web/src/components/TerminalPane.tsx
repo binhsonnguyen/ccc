@@ -42,7 +42,7 @@ export default function TerminalPane({
   // The server replays scrollback on every fresh attach, so callers
   // *must* clear the terminal first or the user sees duplicated output.
   const openWS = useCallback(
-    (uuid: string) => {
+    (uuid: string, c2Id: string) => {
       const entry = getOrCreateTerm(uuid);
       // Tear down any leftover socket. Idempotent: noop if already null.
       if (entry.ws) {
@@ -58,7 +58,7 @@ export default function TerminalPane({
       // matters because claude often runs in alt-screen.
       entry.term.reset();
 
-      const ws = new WebSocket(ptyWsURL(uuid));
+      const ws = new WebSocket(ptyWsURL(c2Id));
       ws.binaryType = 'arraybuffer';
       entry.ws = ws;
       onStatus(uuid, 'connecting');
@@ -162,7 +162,7 @@ export default function TerminalPane({
     // ---- WebSocket --------------------------------------------------
     if (!wsBoundRef.current) {
       wsBoundRef.current = true;
-      openWS(tab.claudeUuid);
+      openWS(tab.claudeUuid, tab.c2Id);
     }
 
     return () => {
@@ -180,7 +180,7 @@ export default function TerminalPane({
       // RESET so StrictMode's remount can rebind. See ref comment above.
       wsBoundRef.current = false;
     };
-  }, [tab.claudeUuid, openWS]);
+  }, [tab.claudeUuid, tab.c2Id, openWS]);
 
   // C1: when tab becomes visible after being hidden, the container size
   // may have changed (window resized while we were display:none).
@@ -204,7 +204,10 @@ export default function TerminalPane({
     }
   }, [visible, tab.claudeUuid]);
 
-  const reconnect = useCallback(() => openWS(tab.claudeUuid), [openWS, tab.claudeUuid]);
+  const reconnect = useCallback(
+    () => openWS(tab.claudeUuid, tab.c2Id),
+    [openWS, tab.claudeUuid, tab.c2Id],
+  );
 
   return (
     <div className={'pane' + (visible ? '' : ' hidden')}>

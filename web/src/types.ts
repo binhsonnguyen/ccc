@@ -25,7 +25,12 @@ export type TabStatus =
   | 'error';
 
 export interface Tab {
+  // claudeUuid: dedup key (one tab per Claude session even if multiple
+  // c2 entries point at it).
   claudeUuid: string;
+  // c2Id: addressing key for /api/sessions/:id/pty WS route. The server
+  // resolves entry by c2 id and looks up its claudeUuid internally.
+  c2Id: string;
   name: string;
   cwd: string;
   status: TabStatus;

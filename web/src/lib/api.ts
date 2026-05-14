@@ -6,7 +6,7 @@ export async function listSessions(): Promise<C2Entry[]> {
   return (await r.json()) ?? [];
 }
 
-export function ptyWsURL(claudeUuid: string): string {
+export function ptyWsURL(c2Id: string): string {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  return `${proto}//${location.host}/api/sessions/${encodeURIComponent(claudeUuid)}/pty`;
+  return `${proto}//${location.host}/api/sessions/${encodeURIComponent(c2Id)}/pty`;
 }

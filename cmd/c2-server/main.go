@@ -226,7 +226,10 @@ func handleSessionArchive(w http.ResponseWriter, r *http.Request, id string) {
 }
 
 func handleSessionPTY(w http.ResponseWriter, r *http.Request, id, originHost, originHostAlt string) {
-	// 1. Look up the entry so we know cwd + claude uuid.
+	// 1. Look up the entry so we know cwd + claude uuid. The URL path
+	//    carries the c2-internal id (8 hex chars), the same key REST
+	//    routes use. The pty manager keys by ClaudeUUID internally; we
+	//    resolve that here.
 	f, err := store.Load()
 	if err != nil {
 		httpError(w, err, http.StatusInternalServerError)
@@ -258,6 +261,7 @@ func handleSessionPTY(w http.ResponseWriter, r *http.Request, id, originHost, or
 	client := newWSClient(conn)
 	sess, err := manager.Attach(e.ClaudeUUID, e.CWD, client)
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "pty[%s]: attach failed: %v\n", id, err)
 		_ = client.WriteControl(map[string]any{"type": "error", "message": err.Error()})
 		_ = conn.Close(websocket.StatusInternalError, "attach failed")
 		return

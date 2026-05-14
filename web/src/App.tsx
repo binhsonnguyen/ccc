@@ -61,6 +61,7 @@ export default function App() {
       if (prev.some((t) => t.claudeUuid === entry.claudeUuid)) return prev;
       const t: Tab = {
         claudeUuid: entry.claudeUuid,
+        c2Id: entry.id,
         name: entry.name || entry.id,
         cwd: entry.cwd || '',
         status: 'connecting',
