@@ -7,3 +7,10 @@
 
 # OS
 .DS_Store
+
+# Web build (Phase 3)
+web/node_modules
+web/dist
+/bin
+# Note: internal/webdev/assets/ IS committed — it is the source-of-truth
+# for `go:embed` so a clean clone can `go build` without Node installed.
