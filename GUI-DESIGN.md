@@ -102,20 +102,94 @@ change.
   the server; durability comes from JSONL being written by `claude`
   itself, not from keeping processes alive across restarts.)
 
+## Known limitations (from review, 2026-05-14)
+
+These are accepted up front. Don't discover them after refactoring.
+
+- **Image paste (Cmd+V) will break.** Claude Code relies on the native
+  terminal emulator catching clipboard images and forwarding via OSC 1337
+  (iTerm) or the Kitty image protocol. xterm.js does not support OSC 1337
+  inline image *upload* from client. Either feature is dropped in GUI,
+  or we add a custom clipboard→base64→stdin hack later. Out of scope for
+  v5 MVP.
+- **Drag-drop file** will likewise break — native terminals handle it,
+  xterm.js needs custom JS handling. Defer.
+- **Terminal capability queries** (`\e[c`, `\e[6n`) — xterm.js answers,
+  but Claude may fall back to ASCII rendering in spots. Cosmetic, accept.
+- **Auth re-login flow** (claude prints OAuth URL) — actually nicer in
+  browser than native terminal; the URL is clickable.
+
+## Concurrency + state, made explicit (from review)
+
+- **Per-PTY scrollback ring buffer.** Server must hold ~1–4 MB of raw
+  bytes per live PTY so a newly-attached client replays output and isn't
+  blank until the next stdout. Cutting the buffer must respect ESC
+  sequence boundaries (don't slice mid-CSI); easiest is to start replay
+  from the most recent alt-screen clear.
+- **Single-attach per PTY.** Opening a session that's already attached
+  elsewhere **kicks the previous client** (sends a close frame, then the
+  new client attaches). tmux-style multi-attach + shared stdin is
+  rejected: with a single user it only produces confusion. UI must show
+  a "this session is open in another tab/window — switching attach
+  here" notice when this happens.
+- **WS reconnect on tab refresh.** Treat as a fresh attach: server kills
+  the old WS, replays scrollback to the new one. Sequence numbers not
+  needed; whole-buffer replay is fine at this size.
+- **archived.json race between CLI and server.** Both processes do
+  read-modify-write. Atomic tmp+rename prevents partial files but not
+  lost updates. Wrap RMW in `flock(2)` on a sidecar `archived.json.lock`.
+  Implement in the `archivejson` adapter so both clients get it for free.
+- **Server discovery.** Server writes `~/.local/share/cc/server.port`
+  (and pid) on start, removes on shutdown. `cc gui` reads this first; if
+  the port is alive, just open the browser tab instead of spawning a
+  duplicate server. Lockfile-style.
+
+## Architecture caveat (from review)
+
+The clean/hexagonal layout described above is deliberately on the
+formal side. For a ~1k LoC personal tool this is mild over-engineering
+— acknowledged tax. The justification: there are genuinely 2
+`ClaudeRunner` implementations (exec for CLI, pty for server) and 2
+clients (CLI, web) over the same use cases, so ports do pay rent here.
+But: don't add a port speculatively for a single implementation. If a
+use-case is 10 lines, inline it at the caller rather than creating
+`core/usecase/foo.go` for ceremony's sake.
+
 ## Phased plan
 
 Each phase is independently verifiable; no phase blocks CLI usage.
 
+**Phase 0 — Feasibility smoke test (do this before Phase 1).**
+Before touching any Go code, spend ~2 hours validating the load-bearing
+assumption: that `claude --resume` runs acceptably under a browser
+xterm.js + WS PTY bridge. Concretely:
+
+- Install `ttyd` (`brew install ttyd`).
+- Run `ttyd -p 7681 -W claude --resume <some-uuid>` and open the URL.
+- Use the session for 20–30 minutes: send messages, watch streaming
+  output, test scrollback, tool use, MCP if applicable, resize the
+  window, paste long text.
+- Watch for: alt-screen flicker, color mismatch, dropped input, render
+  lag on long streams, broken keybindings.
+
+**Exit criteria**: TUI renders correctly, input is responsive, no
+showstopper. Document any defects. If anything is a showstopper,
+*revisit v5 itself* before Phase 1 — refactoring 4 phases on top of a
+broken transport would be expensive.
+
 1. **Refactor Go to clean-arch layout.** Move `internal/sessions` →
    `adapters/claudefs`, `internal/store` → `adapters/archivejson`,
-   extract use-cases into `core/usecase`. CLI behavior identical.
+   extract use-cases into `core/usecase`. Add `flock`-wrapped RMW in
+   `archivejson`. CLI behavior identical.
 2. **Server skeleton + minimal HTML.** `c2-server` binary, list endpoint,
    one HTML page (no framework) with xterm.js wired to WS PTY — proves
-   `claude --resume` runs cleanly inside a browser terminal.
+   `claude --resume` runs cleanly inside a browser terminal end-to-end
+   in *our* server (not just ttyd). Includes scrollback ring buffer and
+   server.port discovery file.
 3. **React + Vite client.** Sidebar + tab bar + xterm panes against the
-   verified server.
-4. **PTY session manager.** Attach/detach semantics, multi-tab survival
-   across tab close, idle auto-shutdown, explicit kill.
+   verified server. WS-per-tab, single-attach kick semantics.
+4. **PTY session manager.** Attach/detach polish, idle auto-shutdown,
+   explicit kill, "open in another tab" notice UX.
 
 ## Open questions deferred
 
@@ -124,3 +198,8 @@ Each phase is independently verifiable; no phase blocks CLI usage.
 - Theming — defer; xterm.js defaults are fine for v5.
 - Search across sessions — current sidebar filter (substring on
   title/cwd) is enough for v5; full-text JSONL search is later.
+- Image paste / drag-drop — deferred per "Known limitations" above.
+  Revisit only if Phase 0 reveals a clean workaround.
+- Idle-PTY warning UX — if a PTY sits idle for hours, should the UI
+  show a "session was idle, scrollback may be stale" hint on reattach?
+  Defer until real usage tells us if it matters.
