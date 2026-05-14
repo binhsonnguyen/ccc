@@ -1,0 +1,9 @@
+# Build output
+/c2-bin
+
+# Go
+*.test
+*.out
+
+# OS
+.DS_Store
