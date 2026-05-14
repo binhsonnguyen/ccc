@@ -191,6 +191,23 @@ broken transport would be expensive.
 4. **PTY session manager.** Attach/detach polish, idle auto-shutdown,
    explicit kill, "open in another tab" notice UX.
 
+## ID contract (between server and web client)
+
+REST and WS endpoints under `/api/sessions/:id/...` all address by
+the **c2-internal id** (8 hex chars). The pty manager keys live
+sessions by **ClaudeUUID** internally; the server resolves c2 id →
+ClaudeUUID inside `handleSessionPTY` before calling `manager.Attach`.
+
+The web client carries both ids per tab:
+- `claudeUuid` — dedup key for the in-memory term Map (one tab per
+  Claude session even if multiple c2 entries point at it).
+- `c2Id` — addressing key for the WS URL.
+
+Don't conflate the two. Phase 3 launched with the client sending
+claudeUuid in the URL by mistake; every WS open hit "entry not
+found" and surfaced as an immediate "Disconnected" overlay. The
+fix is in commit history; the lesson stays here.
+
 ## Open questions deferred
 
 - Mobile/responsive layout — out of scope for v5.
