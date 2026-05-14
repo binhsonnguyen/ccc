@@ -8,9 +8,11 @@ import (
 	"path/filepath"
 	"strings"
 
+	"c2/adapters/archivejson"
+	"c2/adapters/claudefs"
+	"c2/core"
+	"c2/core/usecase"
 	"c2/internal/picker"
-	"c2/internal/sessions"
-	"c2/internal/store"
 )
 
 const usage = `c2 — manage your curated Claude Code sessions
@@ -34,6 +36,8 @@ Usage:
 Environment:
   C2_NO_WRAPPER=1     also echo eval'd command to stderr
 `
+
+var store = archivejson.New()
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -78,27 +82,19 @@ func run(args []string) error {
 // runPicker is the heart of `c2` — load store, lazy-link pending entries,
 // show picker, dispatch on user action.
 func runPicker(opts picker.Options, archivedView bool) error {
+	if err := lazyLink(); err != nil {
+		fmt.Fprintln(os.Stderr, "c2: warn:", err)
+	}
 	f, err := store.Load()
 	if err != nil {
 		return err
 	}
-	if err := lazyLink(f); err != nil {
-		fmt.Fprintln(os.Stderr, "c2: warn:", err)
-	}
 
-	entries := f.Active(false)
+	var entries []core.C2Entry
 	if archivedView {
-		// Show only archived
-		archivedSet := map[string]bool{}
-		for _, id := range f.Archived {
-			archivedSet[id] = true
-		}
-		entries = nil
-		for _, e := range f.Sessions {
-			if archivedSet[e.ID] {
-				entries = append(entries, e)
-			}
-		}
+		entries = f.ListArchived()
+	} else {
+		entries = f.ListActive()
 	}
 
 	res, err := picker.PickC2(entries, opts)
@@ -107,11 +103,12 @@ func runPicker(opts picker.Options, archivedView bool) error {
 	}
 	switch res.Action {
 	case picker.ActionResume:
-		if res.Entry.ClaudeUUID == "" {
+		e := res.Entry
+		if e.ClaudeUUID == "" {
 			return fmt.Errorf("session %s has no Claude UUID yet — start it once with `claude` in %s",
-				res.Entry.Name, res.Entry.CWD)
+				e.Name, e.CWD)
 		}
-		emit(emitResume(res.Entry.CWD, res.Entry.ClaudeUUID))
+		emit(emitResume(e.CWD, e.ClaudeUUID))
 		return nil
 	case picker.ActionNew:
 		return cmdNew(nil)
@@ -126,6 +123,8 @@ func cmdNew(args []string) error {
 	if err != nil {
 		return err
 	}
+	// Pick a directory first (read-only over current state) so we don't hold
+	// the store lock during the interactive fzf prompt.
 	f, err := store.Load()
 	if err != nil {
 		return err
@@ -138,11 +137,14 @@ func cmdNew(args []string) error {
 	if len(args) > 0 {
 		name = strings.Join(args, " ")
 	}
-	e := f.Add(name, dir, "")
-	if err := store.Save(f); err != nil {
+	var created core.C2Entry
+	if err := store.Mutate(func(f *core.ArchiveFile) error {
+		created = f.AddEntry(name, dir, "")
+		return nil
+	}); err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "c2: created session %s (%s) in %s — Claude UUID will link on next `c2`\n", e.Name, e.ID, dir)
+	fmt.Fprintf(os.Stderr, "c2: created session %s (%s) in %s — Claude UUID will link on next `c2`\n", created.Name, created.ID, dir)
 	emit(fmt.Sprintf("cd %s && claude", shellQuote(dir)))
 	return nil
 }
@@ -150,7 +152,7 @@ func cmdNew(args []string) error {
 // pickNewDir gathers candidates and shows the dir picker. PWD is always first
 // (default highlight). Then unique cwds from c2-sessions, then unique cwds
 // from raw Claude sessions, both ordered by recency. Duplicates dropped.
-func pickNewDir(pwd string, f *store.File) (string, error) {
+func pickNewDir(pwd string, f *core.ArchiveFile) (string, error) {
 	seen := map[string]bool{}
 	var cands []picker.DirCandidate
 	add := func(label, path string) {
@@ -162,13 +164,13 @@ func pickNewDir(pwd string, f *store.File) (string, error) {
 	}
 	add("[PWD]", pwd)
 
-	// c2-session cwds, sorted by createdAt desc (Active() already returns this order).
-	for _, e := range f.Active(true) {
+	// c2-session cwds, sorted by createdAt desc.
+	for _, e := range f.ListAll() {
 		add("[c2]", e.CWD)
 	}
 
 	// Claude raw session cwds, sorted by mtime desc.
-	if ss, err := sessions.Scan(); err == nil {
+	if ss, err := claudefs.New().Scan(); err == nil {
 		for _, s := range ss {
 			if s.Sidechain {
 				continue
@@ -181,27 +183,16 @@ func pickNewDir(pwd string, f *store.File) (string, error) {
 }
 
 func cmdBind() error {
-	ss, err := sessions.Scan()
+	ss, err := claudefs.New().Scan()
 	if err != nil {
 		return err
 	}
+	// Read-only snapshot to compute the unbound list for the picker.
 	f, err := store.Load()
 	if err != nil {
 		return err
 	}
-	// Filter: hide already-bound Claude UUIDs.
-	bound := map[string]bool{}
-	for _, e := range f.Sessions {
-		if e.ClaudeUUID != "" {
-			bound[e.ClaudeUUID] = true
-		}
-	}
-	var unbound []sessions.Session
-	for _, s := range ss {
-		if !s.Sidechain && !bound[s.UUID] {
-			unbound = append(unbound, s)
-		}
-	}
+	unbound := f.UnboundClaudeSessions(ss)
 	if len(unbound) == 0 {
 		return fmt.Errorf("no unbound Claude sessions to adopt")
 	}
@@ -210,12 +201,21 @@ func cmdBind() error {
 		return err
 	}
 	name := filepath.Base(chosen.CWD)
-	e := f.Add(name, chosen.CWD, chosen.UUID)
-	if err := store.Save(f); err != nil {
+	var created core.C2Entry
+	if err := store.Mutate(func(f *core.ArchiveFile) error {
+		// Re-check inside the lock: another c2 may have bound this uuid.
+		for _, e := range f.Sessions {
+			if e.ClaudeUUID == chosen.UUID {
+				return fmt.Errorf("session %s already bound", chosen.UUID[:8])
+			}
+		}
+		created = f.AddEntry(name, chosen.CWD, chosen.UUID)
+		return nil
+	}); err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "c2: bound %s → %s (%s)\n", chosen.UUID[:8], e.Name, e.ID)
-	emit(emitResume(e.CWD, e.ClaudeUUID))
+	fmt.Fprintf(os.Stderr, "c2: bound %s → %s (%s)\n", chosen.UUID[:8], created.Name, created.ID)
+	emit(emitResume(created.CWD, created.ClaudeUUID))
 	return nil
 }
 
@@ -223,23 +223,15 @@ func cmdArchive(args []string) error {
 	if len(args) != 1 {
 		return fmt.Errorf("usage: c2 archive <id>")
 	}
-	f, err := store.Load()
+	entry, now, err := usecase.ToggleArchive(store, args[0])
 	if err != nil {
-		return err
-	}
-	e := f.Find(args[0])
-	if e == nil {
-		return fmt.Errorf("no session with id %s", args[0])
-	}
-	now := f.Archive(args[0])
-	if err := store.Save(f); err != nil {
 		return err
 	}
 	state := "unarchived"
 	if now {
 		state = "archived"
 	}
-	fmt.Fprintf(os.Stderr, "c2: %s %s\n", state, e.Name)
+	fmt.Fprintf(os.Stderr, "c2: %s %s\n", state, entry.Name)
 	return nil
 }
 
@@ -247,19 +239,18 @@ func cmdRename(args []string) error {
 	if len(args) < 2 {
 		return fmt.Errorf("usage: c2 rename <id> <new name...>")
 	}
-	f, err := store.Load()
-	if err != nil {
+	newName := strings.Join(args[1:], " ")
+	if err := store.Mutate(func(f *core.ArchiveFile) error {
+		e := f.Find(args[0])
+		if e == nil {
+			return fmt.Errorf("no session with id %s", args[0])
+		}
+		e.Name = newName
+		return nil
+	}); err != nil {
 		return err
 	}
-	e := f.Find(args[0])
-	if e == nil {
-		return fmt.Errorf("no session with id %s", args[0])
-	}
-	e.Name = strings.Join(args[1:], " ")
-	if err := store.Save(f); err != nil {
-		return err
-	}
-	fmt.Fprintf(os.Stderr, "c2: renamed %s → %s\n", args[0], e.Name)
+	fmt.Fprintf(os.Stderr, "c2: renamed %s → %s\n", args[0], newName)
 	return nil
 }
 
@@ -267,25 +258,23 @@ func cmdRemove(args []string) error {
 	if len(args) != 1 {
 		return fmt.Errorf("usage: c2 rm <id>")
 	}
-	f, err := store.Load()
-	if err != nil {
+	var removedName string
+	if err := store.Mutate(func(f *core.ArchiveFile) error {
+		for i, e := range f.Sessions {
+			if e.ID == args[0] {
+				removedName = e.Name
+				f.Sessions = append(f.Sessions[:i], f.Sessions[i+1:]...)
+				// idempotent: removes id from archived list if present
+				f.RemoveArchived(args[0])
+				return nil
+			}
+		}
+		return fmt.Errorf("no session with id %s", args[0])
+	}); err != nil {
 		return err
 	}
-	for i, e := range f.Sessions {
-		if e.ID == args[0] {
-			f.Sessions = append(f.Sessions[:i], f.Sessions[i+1:]...)
-			f.Archive(args[0]) // remove from archived list if present
-			f.Archive(args[0]) // toggle back if it wasn't there (no-op)
-			// Cleaner: just drop the id from Archived directly.
-			cleanArchived(f, args[0])
-			if err := store.Save(f); err != nil {
-				return err
-			}
-			fmt.Fprintf(os.Stderr, "c2: removed %s (%s)\n", args[0], e.Name)
-			return nil
-		}
-	}
-	return fmt.Errorf("no session with id %s", args[0])
+	fmt.Fprintf(os.Stderr, "c2: removed %s (%s)\n", args[0], removedName)
+	return nil
 }
 
 // cmdPickerAction is invoked by fzf's `reload` binding. It mutates the
@@ -317,16 +306,14 @@ func cmdPickerAction(args []string) error {
 			return emitRows(archivedView)
 		}
 		id := rest[0]
-		f, err := store.Load()
-		if err != nil {
-			return err
-		}
-		if f.Find(id) == nil {
-			// Stale id (already removed). Silently re-emit.
-			return emitRows(archivedView)
-		}
-		f.Archive(id)
-		if err := store.Save(f); err != nil {
+		if err := store.Mutate(func(f *core.ArchiveFile) error {
+			if f.Find(id) == nil {
+				// Stale id (already removed). Silently no-op.
+				return nil
+			}
+			f.ToggleArchive(id)
+			return nil
+		}); err != nil {
 			return err
 		}
 		return emitRows(archivedView)
@@ -340,19 +327,11 @@ func emitRows(archivedView bool) error {
 	if err != nil {
 		return err
 	}
-	var entries []store.Entry
+	var entries []core.C2Entry
 	if archivedView {
-		archivedSet := map[string]bool{}
-		for _, id := range f.Archived {
-			archivedSet[id] = true
-		}
-		for _, e := range f.Sessions {
-			if archivedSet[e.ID] {
-				entries = append(entries, e)
-			}
-		}
+		entries = f.ListArchived()
 	} else {
-		entries = f.Active(false)
+		entries = f.ListActive()
 	}
 	rows := picker.FormatC2Rows(entries)
 	if len(rows) == 0 {
@@ -365,18 +344,14 @@ func emitRows(archivedView bool) error {
 	return nil
 }
 
-func cleanArchived(f *store.File, id string) {
-	for i, a := range f.Archived {
-		if a == id {
-			f.Archived = append(f.Archived[:i], f.Archived[i+1:]...)
-			return
-		}
-	}
-}
-
 // lazyLink fills in ClaudeUUID for any c2-session that's still pending,
 // by matching cwd + creation time against Claude's session storage.
-func lazyLink(f *store.File) error {
+func lazyLink() error {
+	// Cheap read-only check first to avoid taking the lock on every invocation.
+	f, err := store.Load()
+	if err != nil {
+		return err
+	}
 	pending := false
 	for _, e := range f.Sessions {
 		if e.ClaudeUUID == "" {
@@ -387,54 +362,51 @@ func lazyLink(f *store.File) error {
 	if !pending {
 		return nil
 	}
-	ss, err := sessions.Scan()
+	ss, err := claudefs.New().Scan()
 	if err != nil {
 		return err
 	}
-	bound := map[string]bool{}
-	for _, e := range f.Sessions {
-		if e.ClaudeUUID != "" {
-			bound[e.ClaudeUUID] = true
+	return store.Mutate(func(f *core.ArchiveFile) error {
+		bound := map[string]bool{}
+		for _, e := range f.Sessions {
+			if e.ClaudeUUID != "" {
+				bound[e.ClaudeUUID] = true
+			}
 		}
-	}
-	changed := false
-	for i := range f.Sessions {
-		e := &f.Sessions[i]
-		if e.ClaudeUUID != "" {
-			continue
-		}
-		// Best match: same cwd, modified after createdAt, not yet bound,
-		// most recent first.
-		var best *sessions.Session
-		for j := range ss {
-			s := &ss[j]
-			if s.CWD != e.CWD {
+		for i := range f.Sessions {
+			e := &f.Sessions[i]
+			if e.ClaudeUUID != "" {
 				continue
 			}
-			// Strict: only link to Claude sessions that have activity AFTER
-			// this c2-session was created. Avoids accidentally adopting
-			// a pre-existing session that happens to share the cwd.
-			if !s.Modified.After(e.CreatedAt) {
-				continue
+			// Best match: same cwd, modified after createdAt, not yet bound,
+			// most recent first.
+			var best *core.Session
+			for j := range ss {
+				s := &ss[j]
+				if s.CWD != e.CWD {
+					continue
+				}
+				// Strict: only link to Claude sessions that have activity AFTER
+				// this c2-session was created. Avoids accidentally adopting
+				// a pre-existing session that happens to share the cwd.
+				if !s.Modified.After(e.CreatedAt) {
+					continue
+				}
+				if bound[s.UUID] {
+					continue
+				}
+				if best == nil || s.Modified.After(best.Modified) {
+					best = s
+				}
 			}
-			if bound[s.UUID] {
-				continue
-			}
-			if best == nil || s.Modified.After(best.Modified) {
-				best = s
+			if best != nil {
+				e.ClaudeUUID = best.UUID
+				bound[best.UUID] = true
+				fmt.Fprintf(os.Stderr, "c2: linked %s → %s\n", e.Name, best.UUID[:8])
 			}
 		}
-		if best != nil {
-			e.ClaudeUUID = best.UUID
-			bound[best.UUID] = true
-			changed = true
-			fmt.Fprintf(os.Stderr, "c2: linked %s → %s\n", e.Name, best.UUID[:8])
-		}
-	}
-	if changed {
-		return store.Save(f)
-	}
-	return nil
+		return nil
+	})
 }
 
 func emitResume(cwd, uuid string) string {
@@ -454,4 +426,3 @@ func emit(cmd string) {
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
-

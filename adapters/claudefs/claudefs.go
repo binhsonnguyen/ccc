@@ -1,18 +1,4 @@
-// Package sessions discovers Claude Code sessions on disk.
-//
-// Storage layout (read-only input):
-//
-//	~/.claude/projects/<encoded-cwd>/
-//	  sessions-index.json   (preferred metadata; ~30% of folders)
-//	  <uuid>.jsonl          (always present; full transcript)
-//
-// cwd is resolved per design v4.1 §2 in priority order:
-//  1. entry.projectPath in sessions-index.json
-//  2. top-level originalPath in the same file
-//  3. last cwd field on a user/assistant line in the JSONL
-//
-// The encoded folder name is never decoded (lossy).
-package sessions
+package claudefs
 
 import (
 	"bufio"
@@ -25,25 +11,18 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"c2/core"
 )
 
-// Session represents a single Claude Code session, ready to display+resume.
-type Session struct {
-	UUID       string    // Claude session id; resume key
-	CWD        string    // working directory; cd target
-	Summary    string    // human-readable title
-	GitBranch  string    // optional, "" if unknown
-	Modified   time.Time // last activity
-	IndexPath  string    // path to sessions-index.json (or "" if synthesized)
-	JSONLPath  string    // path to <uuid>.jsonl
-	Sidechain  bool      // true = subagent session, hidden by default
-}
+type Repo struct{}
 
-// indexFile mirrors sessions-index.json structure (defensive — unknown fields ignored).
+func New() *Repo { return &Repo{} }
+
 type indexFile struct {
-	Version      int           `json:"version"`
-	OriginalPath string        `json:"originalPath"`
-	Entries      []indexEntry  `json:"entries"`
+	Version      int          `json:"version"`
+	OriginalPath string       `json:"originalPath"`
+	Entries      []indexEntry `json:"entries"`
 }
 
 type indexEntry struct {
@@ -59,9 +38,7 @@ type indexEntry struct {
 	IsSidechain  bool   `json:"isSidechain"`
 }
 
-// Scan walks ~/.claude/projects and returns all sessions sorted most-recent-first.
-// Sessions whose cwd cannot be resolved are dropped with a stderr warning.
-func Scan() ([]Session, error) {
+func (r *Repo) Scan() ([]core.Session, error) {
 	root, err := projectsRoot()
 	if err != nil {
 		return nil, err
@@ -72,7 +49,7 @@ func Scan() ([]Session, error) {
 		return nil, fmt.Errorf("read %s: %w", root, err)
 	}
 
-	var sessions []Session
+	var sessions []core.Session
 	for _, d := range dirs {
 		if !d.IsDir() {
 			continue
@@ -92,7 +69,6 @@ func Scan() ([]Session, error) {
 	return sessions, nil
 }
 
-// projectsRoot returns ~/.claude/projects, honoring $CLAUDE_HOME if set.
 func projectsRoot() (string, error) {
 	if h := os.Getenv("CLAUDE_HOME"); h != "" {
 		return filepath.Join(h, "projects"), nil
@@ -104,14 +80,11 @@ func projectsRoot() (string, error) {
 	return filepath.Join(home, ".claude", "projects"), nil
 }
 
-// scanProject reads one project folder. Prefers sessions-index.json; falls back
-// to walking *.jsonl files and synthesizing entries.
-func scanProject(dir string) ([]Session, error) {
+func scanProject(dir string) ([]core.Session, error) {
 	indexPath := filepath.Join(dir, "sessions-index.json")
 	if idx, err := loadIndex(indexPath); err == nil {
 		return sessionsFromIndex(idx, indexPath, dir), nil
 	} else if !errors.Is(err, fs.ErrNotExist) {
-		// Index exists but is malformed — fall through to JSONL fallback.
 		fmt.Fprintf(os.Stderr, "c2: malformed %s: %v\n", indexPath, err)
 	}
 	return sessionsFromJSONL(dir)
@@ -129,8 +102,8 @@ func loadIndex(path string) (*indexFile, error) {
 	return &idx, nil
 }
 
-func sessionsFromIndex(idx *indexFile, indexPath, dir string) []Session {
-	out := make([]Session, 0, len(idx.Entries))
+func sessionsFromIndex(idx *indexFile, indexPath, dir string) []core.Session {
+	out := make([]core.Session, 0, len(idx.Entries))
 	for _, e := range idx.Entries {
 		cwd := e.ProjectPath
 		if cwd == "" {
@@ -140,7 +113,6 @@ func sessionsFromIndex(idx *indexFile, indexPath, dir string) []Session {
 		if jsonlPath == "" {
 			jsonlPath = filepath.Join(dir, e.SessionID+".jsonl")
 		}
-		// Final fallback: parse JSONL for cwd.
 		if cwd == "" {
 			cwd = lastCWDFromJSONL(jsonlPath)
 		}
@@ -156,7 +128,7 @@ func sessionsFromIndex(idx *indexFile, indexPath, dir string) []Session {
 		if summary == "" {
 			summary = strings.TrimSpace(e.FirstPrompt)
 		}
-		out = append(out, Session{
+		out = append(out, core.Session{
 			UUID:      e.SessionID,
 			CWD:       cwd,
 			Summary:   summary,
@@ -170,14 +142,12 @@ func sessionsFromIndex(idx *indexFile, indexPath, dir string) []Session {
 	return out
 }
 
-// sessionsFromJSONL handles project folders without sessions-index.json.
-// Parses each .jsonl just enough to extract cwd + summary.
-func sessionsFromJSONL(dir string) ([]Session, error) {
+func sessionsFromJSONL(dir string) ([]core.Session, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
 	}
-	var out []Session
+	var out []core.Session
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
 			continue
@@ -193,7 +163,7 @@ func sessionsFromJSONL(dir string) ([]Session, error) {
 		if err != nil {
 			continue
 		}
-		out = append(out, Session{
+		out = append(out, core.Session{
 			UUID:      uuid,
 			CWD:       cwd,
 			Summary:   summary,
@@ -204,15 +174,12 @@ func sessionsFromJSONL(dir string) ([]Session, error) {
 	return out, nil
 }
 
-// jsonlLine is the minimal subset we need from any JSONL line.
 type jsonlLine struct {
 	Type    string          `json:"type"`
 	CWD     string          `json:"cwd"`
 	Message json.RawMessage `json:"message"`
 }
 
-// scanJSONL reads a JSONL once and returns (lastCWD, firstUserPrompt).
-// Only user/assistant lines carry cwd (verified — see DESIGN.md §2).
 func scanJSONL(path string) (cwd, summary string) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -221,7 +188,7 @@ func scanJSONL(path string) (cwd, summary string) {
 	defer f.Close()
 
 	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 1<<16), 1<<24) // up to 16MB per line
+	scanner.Buffer(make([]byte, 1<<16), 1<<24)
 	for scanner.Scan() {
 		var line jsonlLine
 		if err := json.Unmarshal(scanner.Bytes(), &line); err != nil {
@@ -240,23 +207,18 @@ func scanJSONL(path string) (cwd, summary string) {
 	return cwd, truncate(summary, 80)
 }
 
-// lastCWDFromJSONL returns only the last cwd, used when index entry lacks it.
 func lastCWDFromJSONL(path string) string {
 	cwd, _ := scanJSONL(path)
 	return cwd
 }
 
-// extractText pulls a plaintext snippet from a user message (handles both
-// string and structured-content shapes Claude uses).
 func extractText(raw json.RawMessage) string {
-	// Try shape: {"role":"user","content":"hello"}
 	var asStr struct {
 		Content string `json:"content"`
 	}
 	if err := json.Unmarshal(raw, &asStr); err == nil && asStr.Content != "" {
 		return strings.TrimSpace(asStr.Content)
 	}
-	// Try shape: {"role":"user","content":[{"type":"text","text":"hi"}, ...]}
 	var asArr struct {
 		Content []struct {
 			Type string `json:"type"`

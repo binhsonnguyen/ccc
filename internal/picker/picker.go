@@ -14,8 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"c2/internal/sessions"
-	"c2/internal/store"
+	"c2/core"
 )
 
 var (
@@ -35,18 +34,18 @@ const (
 // C2Result is what PickC2 returns.
 type C2Result struct {
 	Action Action
-	Entry  *store.Entry // populated when Action == ActionResume
+	Entry  *core.C2Entry // populated when Action == ActionResume
 }
 
 // PickC2 shows the c2-session picker and returns what the user did.
 // `entries` are already filtered (active vs archived) by the caller.
-func PickC2(entries []store.Entry, opts Options) (*C2Result, error) {
+func PickC2(entries []core.C2Entry, opts Options) (*C2Result, error) {
 	if err := requireFzf(); err != nil {
 		return nil, err
 	}
 
 	rows := FormatC2Rows(entries)
-	idx := map[string]*store.Entry{}
+	idx := map[string]*core.C2Entry{}
 	for i := range entries {
 		idx[entries[i].ID] = &entries[i]
 	}
@@ -144,12 +143,12 @@ func PickDir(candidates []DirCandidate) (string, error) {
 
 // PickClaude shows all Claude sessions for the bind flow. Returns the chosen
 // session, or ErrCancelled.
-func PickClaude(ss []sessions.Session, opts Options) (*sessions.Session, error) {
+func PickClaude(ss []core.Session, opts Options) (*core.Session, error) {
 	if err := requireFzf(); err != nil {
 		return nil, err
 	}
 	rows := formatClaudeRows(ss)
-	idx := map[string]*sessions.Session{}
+	idx := map[string]*core.Session{}
 	for i := range ss {
 		idx[ss[i].UUID] = &ss[i]
 	}
@@ -242,7 +241,7 @@ func runFzf(args []string, stdin string) (selected, key string, err error) {
 
 // FormatC2Rows formats entries for fzf input. Exported so the
 // --picker-action callback can re-emit the same format on reload.
-func FormatC2Rows(entries []store.Entry) []string {
+func FormatC2Rows(entries []core.C2Entry) []string {
 	rows := make([]string, 0, len(entries))
 	now := time.Now()
 	for _, e := range entries {
@@ -261,7 +260,7 @@ func FormatC2Rows(entries []store.Entry) []string {
 	return rows
 }
 
-func formatClaudeRows(ss []sessions.Session) []string {
+func formatClaudeRows(ss []core.Session) []string {
 	rows := make([]string, 0, len(ss))
 	now := time.Now()
 	for _, s := range ss {
