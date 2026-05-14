@@ -31,6 +31,8 @@ Usage:
   c2 -a               picker over archived c2-sessions
   c2 rename <id> <name>
   c2 rm <id>          remove c2-session entry (Claude session left intact)
+  c2 gui              open the local web UI in your browser (spawns
+                        c2-server detached if not already running)
   c2 -h, --help       show this help
 
 Environment:
@@ -74,6 +76,8 @@ func run(args []string) error {
 		return cmdRemove(args[1:])
 	case "--picker-action":
 		return cmdPickerAction(args[1:])
+	case "gui":
+		return cmdGUI()
 	}
 	q := strings.Join(args, " ")
 	return runPicker(picker.Options{Query: q}, false)

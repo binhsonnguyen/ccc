@@ -64,10 +64,71 @@ type Session struct {
 type Manager struct {
 	mu       sync.Mutex
 	sessions map[string]*Session
+
+	// onActivity, if set, is invoked whenever a PTY is spawned, attached
+	// to, or detached from. The server uses it to reset its idle watchdog
+	// timer so we don't shut down with a live PTY in the map.
+	onActivity func()
+
+	// startPTY is the function used to spawn a PTY. Production code uses
+	// ptyrunner.Start; tests swap in a stub so they don't depend on the
+	// real `claude` binary being installed.
+	startPTY func(cwd, uuid string) (*ptyrunner.Session, error)
 }
 
 func New() *Manager {
-	return &Manager{sessions: map[string]*Session{}}
+	return &Manager{
+		sessions: map[string]*Session{},
+		startPTY: ptyrunner.Start,
+	}
+}
+
+// SetActivityHook installs a callback fired on every Attach/Detach. Used
+// by the server's idle watchdog. Pass nil to clear.
+func (m *Manager) SetActivityHook(f func()) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onActivity = f
+}
+
+// Count returns the number of live PTY sessions (including those in the
+// post-exit grace period).
+func (m *Manager) Count() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.sessions)
+}
+
+// AttachedCount returns the number of sessions that currently have a
+// client attached. Multiple sessions may exist without any attached
+// client (detached scrollback-only).
+func (m *Manager) AttachedCount() int {
+	m.mu.Lock()
+	sessions := make([]*Session, 0, len(m.sessions))
+	for _, s := range m.sessions {
+		sessions = append(sessions, s)
+	}
+	m.mu.Unlock()
+	n := 0
+	for _, s := range sessions {
+		s.mu.Lock()
+		if s.client != nil {
+			n++
+		}
+		s.mu.Unlock()
+	}
+	return n
+}
+
+// fireActivity calls the registered hook (if any). Caller must NOT hold
+// m.mu — the hook is user code and may take arbitrary time.
+func (m *Manager) fireActivity() {
+	m.mu.Lock()
+	f := m.onActivity
+	m.mu.Unlock()
+	if f != nil {
+		f()
+	}
 }
 
 // Attach binds c to the PTY for uuid. If no PTY exists, one is spawned
@@ -82,7 +143,7 @@ func (m *Manager) Attach(uuid, cwd string, c Client) (*Session, error) {
 	m.mu.Lock()
 	s, ok := m.sessions[uuid]
 	if !ok {
-		p, err := ptyrunner.Start(cwd, uuid)
+		p, err := m.startPTY(cwd, uuid)
 		if err != nil {
 			m.mu.Unlock()
 			return nil, err
@@ -126,6 +187,7 @@ func (m *Manager) Attach(uuid, cwd string, c Client) (*Session, error) {
 		_ = c.WriteControl(map[string]any{"type": "exit", "code": code})
 	}
 	s.mu.Unlock()
+	m.fireActivity()
 	return s, nil
 }
 
@@ -134,10 +196,11 @@ func (m *Manager) Attach(uuid, cwd string, c Client) (*Session, error) {
 // multiple times.
 func (m *Manager) Detach(s *Session, c Client) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.client == c {
 		s.client = nil
 	}
+	s.mu.Unlock()
+	m.fireActivity()
 }
 
 // WriteStdin forwards bytes from the client into the PTY master. Caller
@@ -238,6 +301,7 @@ func (m *Manager) readLoop(s *Session) {
 			delete(m.sessions, s.UUID)
 		}
 		m.mu.Unlock()
+		m.fireActivity()
 	})
 }
 

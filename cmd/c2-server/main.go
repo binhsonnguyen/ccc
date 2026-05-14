@@ -111,9 +111,28 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// idleTimeout: shut the server down after this much continuous
+	// inactivity (zero live PTYs AND zero attached clients). 0 disables.
+	idleTimeout := idleTimeoutFromEnv()
+	idleCtx, idleCancel := context.WithCancel(context.Background())
+	defer idleCancel()
+	idleTriggered := make(chan struct{})
+	if idleTimeout > 0 {
+		fmt.Fprintf(os.Stderr, "c2-server: idle watchdog: shutdown after %d minutes of inactivity\n",
+			int(idleTimeout.Minutes()))
+		startIdleWatcher(idleCtx, manager, idleTimeout, idleTriggered)
+	} else {
+		fmt.Fprintln(os.Stderr, "c2-server: idle watchdog disabled (C2_SERVER_IDLE_MINUTES=0)")
+	}
+
 	go func() {
-		<-ctx.Done()
-		fmt.Fprintln(os.Stderr, "c2-server: shutting down")
+		select {
+		case <-ctx.Done():
+			fmt.Fprintln(os.Stderr, "c2-server: shutting down")
+		case <-idleTriggered:
+			fmt.Fprintf(os.Stderr, "c2-server: idle: shutting down after %d minutes of inactivity\n",
+				int(idleTimeout.Minutes()))
+		}
 		shutCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		_ = srv.Shutdown(shutCtx)
@@ -432,3 +451,89 @@ func httpError(w http.ResponseWriter, err error, code int) {
 
 // Ensure core import isn't dropped — needed for ToggleArchive's return type.
 var _ = core.C2Entry{}
+
+// ---------------------------------------------------------------------------
+// Idle auto-shutdown
+// ---------------------------------------------------------------------------
+
+// idleCheckInterval is how often the watchdog polls manager state. Kept
+// short relative to the timeout so the granularity error is small but
+// long enough not to busy-loop.
+const idleCheckInterval = 30 * time.Second
+
+// idleTimeoutFromEnv reads C2_SERVER_IDLE_MINUTES. Default 15 minutes,
+// 0 disables the watchdog.
+func idleTimeoutFromEnv() time.Duration {
+	v := os.Getenv("C2_SERVER_IDLE_MINUTES")
+	if v == "" {
+		return 15 * time.Minute
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil || n < 0 {
+		fmt.Fprintf(os.Stderr, "c2-server: warn: invalid C2_SERVER_IDLE_MINUTES=%q, using default\n", v)
+		return 15 * time.Minute
+	}
+	return time.Duration(n) * time.Minute
+}
+
+// startIdleWatcher polls the manager for activity and closes `fire` when
+// the system has been idle (0 PTYs AND 0 clients) continuously for
+// `timeout`. The manager's activity hook resets the "last active" mark
+// AND bumps a generation counter whenever an attach/detach/GC happens.
+//
+// Invariant: `fire` is closed only if, under a single critical section,
+// (a) Count==0, (b) AttachedCount==0, (c) the generation observed at the
+// start of the check has not changed, AND (d) elapsed >= timeout. This
+// closes the TOCTOU window where an Attach() could complete between our
+// state check and the close(fire) — the bumped generation forces the
+// next tick to reset waiting instead of firing.
+func startIdleWatcher(ctx context.Context, m *ptymgr.Manager, timeout time.Duration, fire chan struct{}) {
+	var (
+		mu         sync.Mutex
+		lastActive = time.Now()
+		gen        uint64 // monotonic activity counter
+	)
+	bump := func() {
+		mu.Lock()
+		lastActive = time.Now()
+		gen++
+		mu.Unlock()
+	}
+	m.SetActivityHook(bump)
+
+	go func() {
+		t := time.NewTicker(idleCheckInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				// Snapshot the generation BEFORE inspecting manager state.
+				// If a concurrent Attach bumps gen after this read, the
+				// recheck below will see the mismatch and abort the fire.
+				mu.Lock()
+				startGen := gen
+				mu.Unlock()
+
+				if m.Count() > 0 || m.AttachedCount() > 0 {
+					bump() // active right now; keep extending
+					continue
+				}
+
+				// Recheck under the lock that both state and generation
+				// agree we are (still) idle. Without this, an Attach
+				// completing between the AttachedCount() read and the
+				// close(fire) below would kill the freshly spawned PTY.
+				mu.Lock()
+				elapsed := time.Since(lastActive)
+				stillIdle := gen == startGen && m.Count() == 0 && m.AttachedCount() == 0
+				mu.Unlock()
+				if stillIdle && elapsed >= timeout {
+					close(fire)
+					return
+				}
+			}
+		}
+	}()
+}

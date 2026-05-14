@@ -229,6 +229,20 @@ code {
 }
 .tab-close:hover { background: rgba(255,255,255,0.1); color: var(--text); }
 
+.tab-kill {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 0 4px;
+  font-size: 12px;
+  line-height: 1;
+  border-radius: 3px;
+}
+.tab-kill:hover:not(:disabled) { background: rgba(220,80,80,0.18); color: var(--danger); }
+.tab-kill:disabled,
+.tab-close:disabled { opacity: 0.4; cursor: not-allowed; }
+
 .pane-host {
   flex: 1;
   position: relative;

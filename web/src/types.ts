@@ -30,4 +30,10 @@ export interface Tab {
   cwd: string;
   status: TabStatus;
   exitCode?: number;
+  // killing: set true after the user clicks Kill and we sent {type:"kill"}.
+  // Cleared when the server responds with `exit` (onExit handler) or a
+  // 3s safety timeout in App.killTab. While true, both Kill and × close
+  // buttons are disabled to prevent spam-click while the server is
+  // SIGKILL'ing the child.
+  killing?: boolean;
 }

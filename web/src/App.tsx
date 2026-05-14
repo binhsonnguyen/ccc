@@ -5,7 +5,7 @@ import TerminalPane from './components/TerminalPane';
 import Welcome from './components/Welcome';
 import Toast from './components/Toast';
 import { listSessions } from './lib/api';
-import { disposeTerm } from './lib/terminals';
+import { disposeTerm, getTerm } from './lib/terminals';
 import type { C2Entry, Tab, TabStatus } from './types';
 
 // App owns three pieces of state:
@@ -84,6 +84,40 @@ export default function App() {
     [tabs],
   );
 
+  // Kill is distinct from close: send a control frame, server SIGKILLs
+  // the PTY, server replies with `{type:"exit"}` which flips status to
+  // 'exited' via onExit. We don't dispose/close the tab here — the user
+  // sees the exit overlay and can close from there.
+  //
+  // While the kill is in flight we mark the tab as `killing` so the UI
+  // disables both Kill and × buttons. A 3s safety timer clears the
+  // state if for some reason no `exit` frame arrives (server crashed,
+  // WS dropped) so the user isn't stuck with a permanently-disabled tab.
+  const killTab = useCallback((uuid: string) => {
+    const entry = getTerm(uuid);
+    const ws = entry?.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      // Kill requires a live WS — we can't ask the server otherwise.
+      // Don't silently rename the action to "close": that would confuse
+      // the user about whether the PTY actually died. Tell them how.
+      showToast('WS disconnected; cannot kill PTY remotely. Use `pkill claude` to terminate.');
+      return;
+    }
+    ws.send(JSON.stringify({ type: 'kill' }));
+    setTabs((prev) =>
+      prev.map((t) => (t.claudeUuid === uuid ? { ...t, killing: true } : t)),
+    );
+    window.setTimeout(() => {
+      setTabs((prev) =>
+        prev.map((t) =>
+          t.claudeUuid === uuid && t.killing && t.status !== 'exited'
+            ? { ...t, killing: false }
+            : t,
+        ),
+      );
+    }, 3000);
+  }, [showToast]);
+
   const updateTabStatus = useCallback(
     (uuid: string, patch: Partial<Tab>) => {
       setTabs((prev) =>
@@ -137,6 +171,7 @@ export default function App() {
           activeUuid={activeUuid}
           onSelect={setActiveUuid}
           onClose={closeTab}
+          onKill={killTab}
         />
         <div className="pane-host">
           {tabs.length === 0 ? (
