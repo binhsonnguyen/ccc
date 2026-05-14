@@ -1,0 +1,474 @@
+// c2-server hosts the local HTTP+WS bridge between the browser xterm.js
+// client and a pool of `claude --resume <uuid>` PTYs. See GUI-DESIGN.md
+// Phase 2 for the architecture.
+//
+// Binds strictly to 127.0.0.1 on a random OS-assigned port. Writes the
+// chosen port + pid to ~/.local/share/cc/server.port for `cc gui` to
+// discover (and to detect duplicate launches). On signal, kills all live
+// PTYs and removes the discovery file.
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+
+	"c2/adapters/archivejson"
+	"c2/core"
+	"c2/core/usecase"
+	"c2/internal/ptymgr"
+
+	"github.com/coder/websocket"
+)
+
+var (
+	store    = archivejson.New()
+	manager  = ptymgr.New()
+	indexDir string // path to web/dev served at /
+)
+
+// portFileCleanup is installed by run() once the discovery file exists,
+// so a top-level panic recover can still remove it. Defers inside run()
+// cover the normal path; this is the belt-and-braces case where a panic
+// (possibly from a non-main goroutine after being recovered into main)
+// would otherwise leave a stale ~/.local/share/cc/server.port behind.
+var portFileCleanup func()
+
+func main() {
+	defer func() {
+		if r := recover(); r != nil {
+			if portFileCleanup != nil {
+				portFileCleanup()
+			}
+			panic(r)
+		}
+	}()
+	if err := run(); err != nil {
+		fmt.Fprintln(os.Stderr, "c2-server:", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
+	// 1. Discovery file. If a previous server is still alive, don't spawn
+	//    a duplicate — print its URL and exit 0 so `cc gui` can just open
+	//    the browser.
+	portFile, err := portFilePath()
+	if err != nil {
+		return err
+	}
+	if existing, alive := readAlivePort(portFile); alive {
+		fmt.Fprintf(os.Stderr, "c2-server: already running at http://127.0.0.1:%d\n", existing)
+		fmt.Printf("http://127.0.0.1:%d\n", existing)
+		return nil
+	}
+
+	// 2. Bind 127.0.0.1:0 — strict loopback, OS picks the port.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return fmt.Errorf("listen: %w", err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+
+	if err := writePortFile(portFile, port); err != nil {
+		ln.Close()
+		return err
+	}
+	cleanupPortFile := func() { _ = os.Remove(portFile) }
+	portFileCleanup = cleanupPortFile // for the top-level panic recover in main
+	defer cleanupPortFile()
+
+	// 3. Locate the dev HTML directory. Search a few likely roots so the
+	//    server works in `go run`, after `go install`, and during tests.
+	indexDir = findWebDevDir()
+	if indexDir == "" {
+		fmt.Fprintln(os.Stderr, "c2-server: warn: web/dev not found; / will 404")
+	}
+
+	originHost := fmt.Sprintf("127.0.0.1:%d", port)
+	originHostAlt := fmt.Sprintf("localhost:%d", port)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/sessions", handleSessions)
+	mux.HandleFunc("/api/sessions/", routeSession(originHost, originHostAlt))
+	mux.HandleFunc("/assets/", handleAssets)
+	mux.HandleFunc("/", handleIndex)
+
+	srv := &http.Server{
+		Handler:      mux,
+		ReadTimeout:  0, // websockets need long-lived connections
+		WriteTimeout: 0,
+	}
+
+	// 4. Signal handler: gracefully shut HTTP down, kill all PTYs, remove
+	//    discovery file.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	go func() {
+		<-ctx.Done()
+		fmt.Fprintln(os.Stderr, "c2-server: shutting down")
+		shutCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(shutCtx)
+		manager.KillAll()
+	}()
+
+	url := fmt.Sprintf("http://127.0.0.1:%d", port)
+	fmt.Fprintf(os.Stderr, "c2-server: listening on %s (pid %d)\n", url, os.Getpid())
+	fmt.Println(url) // stdout: machine-readable for callers like `cc gui`
+
+	if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// HTTP routes
+// ---------------------------------------------------------------------------
+
+func handleSessions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	f, err := store.Load()
+	if err != nil {
+		httpError(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, f.ListActive())
+}
+
+// routeSession dispatches /api/sessions/:id and /api/sessions/:id/{archive,pty}.
+// Kept hand-rolled rather than pulling in a router — only three patterns.
+func routeSession(originHost, originHostAlt string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		rest := strings.TrimPrefix(r.URL.Path, "/api/sessions/")
+		parts := strings.SplitN(rest, "/", 2)
+		if len(parts) == 0 || parts[0] == "" {
+			http.NotFound(w, r)
+			return
+		}
+		id := parts[0]
+		sub := ""
+		if len(parts) == 2 {
+			sub = parts[1]
+		}
+		switch sub {
+		case "":
+			handleSessionGet(w, r, id)
+		case "archive":
+			handleSessionArchive(w, r, id)
+		case "pty":
+			handleSessionPTY(w, r, id, originHost, originHostAlt)
+		default:
+			http.NotFound(w, r)
+		}
+	}
+}
+
+func handleSessionGet(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	f, err := store.Load()
+	if err != nil {
+		httpError(w, err, http.StatusInternalServerError)
+		return
+	}
+	e := f.Find(id)
+	if e == nil {
+		http.NotFound(w, r)
+		return
+	}
+	writeJSON(w, e)
+}
+
+func handleSessionArchive(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	_, archived, err := usecase.ToggleArchive(store, id)
+	if err != nil {
+		httpError(w, err, http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, map[string]bool{"archived": archived})
+}
+
+func handleSessionPTY(w http.ResponseWriter, r *http.Request, id, originHost, originHostAlt string) {
+	// 1. Look up the entry so we know cwd + claude uuid.
+	f, err := store.Load()
+	if err != nil {
+		httpError(w, err, http.StatusInternalServerError)
+		return
+	}
+	e := f.Find(id)
+	if e == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if e.ClaudeUUID == "" {
+		http.Error(w, "session has no claude uuid yet", http.StatusConflict)
+		return
+	}
+
+	// 2. Accept the WS, restricting origin to our own loopback URL. Local-only
+	//    binding alone doesn't protect us from drive-by cross-origin WS from
+	//    a webpage the user opens in the same browser; origin check does.
+	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
+		OriginPatterns: []string{originHost, originHostAlt},
+	})
+	if err != nil {
+		// websocket.Accept already wrote an error response.
+		return
+	}
+	// Per coder/websocket: must call CloseNow on exit if not gracefully closed.
+	defer conn.CloseNow()
+
+	client := newWSClient(conn)
+	sess, err := manager.Attach(e.ClaudeUUID, e.CWD, client)
+	if err != nil {
+		_ = client.WriteControl(map[string]any{"type": "error", "message": err.Error()})
+		_ = conn.Close(websocket.StatusInternalError, "attach failed")
+		return
+	}
+	defer manager.Detach(sess, client)
+
+	// 3. Read loop: forward binary frames as stdin, text frames as control.
+	ctx := r.Context()
+	for {
+		typ, data, err := conn.Read(ctx)
+		if err != nil {
+			// Normal close or transport error; either way we detach.
+			return
+		}
+		switch typ {
+		case websocket.MessageBinary:
+			if werr := sess.WriteStdin(data); werr != nil {
+				_ = conn.Close(websocket.StatusInternalError, "stdin write failed")
+				return
+			}
+		case websocket.MessageText:
+			handleControl(sess, conn, data)
+		}
+	}
+}
+
+func handleControl(sess *ptymgr.Session, conn *websocket.Conn, data []byte) {
+	var msg struct {
+		Type string `json:"type"`
+		Cols uint16 `json:"cols"`
+		Rows uint16 `json:"rows"`
+	}
+	if err := json.Unmarshal(data, &msg); err != nil {
+		return // ignore garbage
+	}
+	switch msg.Type {
+	case "resize":
+		_ = sess.Resize(msg.Cols, msg.Rows)
+	case "kill":
+		_ = sess.Kill()
+		_ = conn.Close(websocket.StatusNormalClosure, "killed")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Static
+// ---------------------------------------------------------------------------
+
+func handleIndex(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+	if indexDir == "" {
+		http.Error(w, "web/dev not bundled with this build", http.StatusNotFound)
+		return
+	}
+	http.ServeFile(w, r, filepath.Join(indexDir, "index.html"))
+}
+
+func handleAssets(w http.ResponseWriter, r *http.Request) {
+	if indexDir == "" {
+		http.NotFound(w, r)
+		return
+	}
+	// Strip /assets/ prefix and serve from web/dev/assets.
+	rel := strings.TrimPrefix(r.URL.Path, "/assets/")
+	if strings.Contains(rel, "..") {
+		http.Error(w, "bad path", http.StatusBadRequest)
+		return
+	}
+	http.ServeFile(w, r, filepath.Join(indexDir, "assets", rel))
+}
+
+// findWebDevDir walks up from the executable + cwd to locate web/dev/.
+// Handles `go run`, `go install`, and `cd cmd/c2-server && ./c2-server`.
+func findWebDevDir() string {
+	candidates := []string{}
+	if exe, err := os.Executable(); err == nil {
+		candidates = append(candidates, filepath.Dir(exe))
+	}
+	if wd, err := os.Getwd(); err == nil {
+		candidates = append(candidates, wd)
+	}
+	for _, start := range candidates {
+		dir := start
+		for i := 0; i < 6; i++ {
+			p := filepath.Join(dir, "web", "dev")
+			if st, err := os.Stat(p); err == nil && st.IsDir() {
+				return p
+			}
+			parent := filepath.Dir(dir)
+			if parent == dir {
+				break
+			}
+			dir = parent
+		}
+	}
+	return ""
+}
+
+// ---------------------------------------------------------------------------
+// Discovery file (~/.local/share/cc/server.port)
+// ---------------------------------------------------------------------------
+
+func portFilePath() (string, error) {
+	if d := os.Getenv("XDG_DATA_HOME"); d != "" {
+		return filepath.Join(d, "cc", "server.port"), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".local", "share", "cc", "server.port"), nil
+}
+
+// readAlivePort returns the recorded port if the recorded pid is alive,
+// otherwise removes the stale file and returns false.
+func readAlivePort(path string) (int, bool) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return 0, false
+	}
+	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
+	if len(lines) < 2 {
+		_ = os.Remove(path)
+		return 0, false
+	}
+	port, err := strconv.Atoi(strings.TrimSpace(lines[0]))
+	if err != nil {
+		_ = os.Remove(path)
+		return 0, false
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(lines[1]))
+	if err != nil {
+		_ = os.Remove(path)
+		return 0, false
+	}
+	// kill -0 probe.
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		_ = os.Remove(path)
+		return 0, false
+	}
+	if err := proc.Signal(syscall.Signal(0)); err != nil {
+		_ = os.Remove(path)
+		return 0, false
+	}
+	return port, true
+}
+
+func writePortFile(path string, port int) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	content := fmt.Sprintf("%d\n%d\n", port, os.Getpid())
+	return os.WriteFile(path, []byte(content), 0o644)
+}
+
+// ---------------------------------------------------------------------------
+// WS client adapter — implements ptymgr.Client over a coder/websocket conn.
+// ---------------------------------------------------------------------------
+
+type wsClient struct {
+	conn   *websocket.Conn
+	writeMu sync.Mutex // serialize writes; coder/websocket requires it
+	closed  bool
+}
+
+func newWSClient(c *websocket.Conn) *wsClient { return &wsClient{conn: c} }
+
+func (c *wsClient) WriteBytes(p []byte) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	if c.closed {
+		return io.ErrClosedPipe
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return c.conn.Write(ctx, websocket.MessageBinary, p)
+}
+
+func (c *wsClient) WriteControl(v any) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	if c.closed {
+		return io.ErrClosedPipe
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return c.conn.Write(ctx, websocket.MessageText, b)
+}
+
+func (c *wsClient) Close() error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	if c.closed {
+		return nil
+	}
+	c.closed = true
+	return c.conn.Close(websocket.StatusNormalClosure, "")
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+func writeJSON(w http.ResponseWriter, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(v); err != nil {
+		// Body partially written — best we can do is log.
+		fmt.Fprintln(os.Stderr, "c2-server: write json:", err)
+	}
+}
+
+func httpError(w http.ResponseWriter, err error, code int) {
+	http.Error(w, err.Error(), code)
+}
+
+// Ensure core import isn't dropped — needed for ToggleArchive's return type.
+var _ = core.C2Entry{}

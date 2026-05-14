@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>c2 — dev terminal</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<link rel="stylesheet" href="https://unpkg.com/@xterm/xterm@5.5.0/css/xterm.css" />
+<script src="https://unpkg.com/@xterm/xterm@5.5.0/lib/xterm.js"></script>
+<script src="https://unpkg.com/@xterm/addon-fit@0.10.0/lib/addon-fit.js"></script>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: #0b0d10; color: #d7dde4;
+               font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  #app { display: flex; height: 100vh; }
+  #sidebar { width: 280px; flex: 0 0 280px; border-right: 1px solid #1f242b;
+             overflow-y: auto; padding: 8px 0; }
+  #sidebar h1 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em;
+                color: #6b7480; margin: 8px 14px; }
+  .sess { padding: 8px 14px; cursor: pointer; border-left: 2px solid transparent;
+          display: block; }
+  .sess:hover { background: #11151a; }
+  .sess.active { background: #141a21; border-left-color: #3b82f6; }
+  .sess .name { color: #e6ebf1; font-weight: 500; }
+  .sess .cwd { color: #6b7480; font-size: 11px; margin-top: 2px;
+               white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  #header { padding: 8px 14px; border-bottom: 1px solid #1f242b;
+            display: flex; align-items: center; gap: 12px; min-height: 36px; }
+  #header .title { font-weight: 500; }
+  #header .cwd { color: #6b7480; font-size: 11px; }
+  #header .status { margin-left: auto; font-size: 11px; color: #6b7480; }
+  #term-wrap { flex: 1; padding: 6px; min-height: 0; }
+  #term { width: 100%; height: 100%; }
+  #toast { position: fixed; bottom: 16px; right: 16px;
+           background: #1a1f26; border: 1px solid #2a3038; padding: 10px 14px;
+           border-radius: 4px; max-width: 360px; opacity: 0; transition: opacity .2s;
+           pointer-events: none; }
+  #toast.show { opacity: 1; }
+  .empty { padding: 24px; color: #6b7480; }
+</style>
+</head>
+<body>
+<div id="app">
+  <aside id="sidebar">
+    <h1>Sessions</h1>
+    <div id="sess-list"><div class="empty">loading…</div></div>
+  </aside>
+  <section id="main">
+    <header id="header">
+      <span class="title" id="hdr-title">— no session —</span>
+      <span class="cwd" id="hdr-cwd"></span>
+      <span class="status" id="hdr-status"></span>
+    </header>
+    <div id="term-wrap"><div id="term"></div></div>
+  </section>
+</div>
+<div id="toast"></div>
+
+<script>
+"use strict";
+
+// Minimal verifier UI for Phase 2. Goal: prove the end-to-end
+// HTTP+WS+PTY+xterm.js path works against our own server (not ttyd).
+// Phase 3 replaces this with a real React + Vite client.
+
+const state = {
+  sessions: [],
+  active: null,        // C2Entry currently bound to the terminal
+  ws: null,
+  term: null,
+  fit: null,
+};
+
+function toast(msg) {
+  const el = document.getElementById("toast");
+  el.textContent = msg;
+  el.classList.add("show");
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => el.classList.remove("show"), 3500);
+}
+
+async function loadSessions() {
+  const r = await fetch("/api/sessions");
+  if (!r.ok) { toast("failed to load sessions"); return; }
+  const data = await r.json();
+  state.sessions = data || [];
+  renderSidebar();
+}
+
+function renderSidebar() {
+  const root = document.getElementById("sess-list");
+  if (!state.sessions.length) {
+    root.innerHTML = '<div class="empty">no sessions — create one with `c2 new` in your shell</div>';
+    return;
+  }
+  root.innerHTML = "";
+  for (const s of state.sessions) {
+    const el = document.createElement("div");
+    el.className = "sess" + (state.active && state.active.id === s.id ? " active" : "");
+    el.innerHTML =
+      `<div class="name"></div><div class="cwd"></div>`;
+    el.querySelector(".name").textContent = s.name || s.id;
+    el.querySelector(".cwd").textContent = s.cwd || "";
+    el.addEventListener("click", () => openSession(s));
+    root.appendChild(el);
+  }
+}
+
+function ensureTerm() {
+  if (state.term) return state.term;
+  const term = new Terminal({
+    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+    fontSize: 13,
+    cursorBlink: true,
+    convertEol: false,
+    theme: { background: '#0b0d10', foreground: '#d7dde4' },
+    allowProposedApi: true,
+  });
+  const fit = new FitAddon.FitAddon();
+  term.loadAddon(fit);
+  term.open(document.getElementById("term"));
+  fit.fit();
+  state.term = term;
+  state.fit = fit;
+
+  // ResizeObserver on the wrapper. Debounced — dragging the window
+  // fires dozens of events per second and each resize round-trips to
+  // ioctl + SIGWINCH inside claude. 80ms feels instant but coalesces.
+  const wrap = document.getElementById("term-wrap");
+  let resizeT;
+  const ro = new ResizeObserver(() => {
+    try { fit.fit(); } catch {}
+    clearTimeout(resizeT);
+    resizeT = setTimeout(sendResize, 80);
+  });
+  ro.observe(wrap);
+
+  // Stdin: every key/paste from xterm goes as a binary frame.
+  term.onData((data) => {
+    if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+      state.ws.send(new TextEncoder().encode(data));
+    }
+  });
+  return term;
+}
+
+function sendResize() {
+  if (!state.term) return;
+  if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return;
+  const cols = state.term.cols, rows = state.term.rows;
+  state.ws.send(JSON.stringify({ type: "resize", cols, rows }));
+}
+
+function setStatus(s) { document.getElementById("hdr-status").textContent = s; }
+
+function openSession(entry) {
+  // Tear down any existing WS first; we only attach one at a time in this
+  // dev page (Phase 3 will support multiple tabs).
+  if (state.ws) {
+    try { state.ws.close(); } catch {}
+    state.ws = null;
+  }
+  state.active = entry;
+  renderSidebar();
+  document.getElementById("hdr-title").textContent = entry.name || entry.id;
+  document.getElementById("hdr-cwd").textContent = entry.cwd || "";
+  const term = ensureTerm();
+  term.reset();
+  setStatus("connecting…");
+
+  const proto = location.protocol === "https:" ? "wss:" : "ws:";
+  const url = `${proto}//${location.host}/api/sessions/${encodeURIComponent(entry.id)}/pty`;
+  const ws = new WebSocket(url);
+  ws.binaryType = "arraybuffer";
+  state.ws = ws;
+
+  ws.onopen = () => {
+    setStatus("connected");
+    // Send initial size after the WS is up.
+    sendResize();
+  };
+  ws.onmessage = (ev) => {
+    if (typeof ev.data === "string") {
+      // Control frame.
+      let msg = null;
+      try { msg = JSON.parse(ev.data); } catch { return; }
+      if (msg.type === "kicked") {
+        toast("Attached elsewhere — this tab was disconnected.");
+        setStatus("kicked");
+      } else if (msg.type === "exit") {
+        toast(`claude exited (code ${msg.code}).`);
+        setStatus(`exited (${msg.code})`);
+      } else if (msg.type === "error") {
+        toast(`error: ${msg.message || "?"}`);
+        setStatus("error");
+      }
+      return;
+    }
+    // Binary frame = raw PTY bytes.
+    const view = new Uint8Array(ev.data);
+    term.write(view);
+  };
+  ws.onclose = () => {
+    if (state.ws === ws) state.ws = null;
+    if (document.getElementById("hdr-status").textContent === "connected") {
+      setStatus("disconnected");
+    }
+  };
+  ws.onerror = () => {
+    setStatus("error");
+  };
+}
+
+loadSessions();
+</script>
+</body>
+</html>
