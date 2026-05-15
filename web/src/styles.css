@@ -44,12 +44,34 @@ code {
   border-radius: 3px;
 }
 
+/* ---- focus halo (A7) -------------------------------------------------- */
+/* Apply a 2-pixel ring *outside* content. Inset outline ate text. */
+*:focus { outline: none; }
+*:focus-visible { outline: none; }
+.session:focus-visible,
+.tab:focus-visible,
+.btn:focus-visible,
+.btn-sm:focus-visible,
+.icon-btn:focus-visible,
+.tab-close:focus-visible,
+.tab-kill:focus-visible,
+.hamburger:focus-visible,
+.toast-action:focus-visible,
+.toast-close:focus-visible {
+  box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent);
+  border-radius: inherit;
+}
+
 /* ---- layout ----------------------------------------------------------- */
 
 .app {
   display: flex;
   height: 100vh;
   width: 100vw;
+}
+
+.sidebar-wrap {
+  display: contents;
 }
 
 .sidebar {
@@ -85,6 +107,8 @@ code {
   padding: 4px 6px;
   border-radius: 3px;
   font-size: 14px;
+  min-width: 24px;
+  min-height: 24px;
 }
 .icon-btn:hover { color: var(--text); background: rgba(255,255,255,0.06); }
 
@@ -113,11 +137,6 @@ code {
 .session.disabled { cursor: not-allowed; opacity: 0.55; }
 .session.disabled:hover { background: transparent; }
 .session.open .session-name { color: #fff; }
-.session:focus-visible,
-.tab:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
-}
 
 .session-name {
   font-weight: 500;
@@ -173,33 +192,35 @@ code {
   display: flex;
   background: var(--tab-bg);
   border-bottom: 1px solid var(--border);
-  min-height: 32px;
+  min-height: 36px;
   overflow-x: auto;
 }
-.tabbar.empty { min-height: 32px; }
+.tabbar.empty { min-height: 36px; }
 
 .tab {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 8px 6px 12px;
+  padding: 4px 6px 4px 12px;
   background: var(--tab-bg);
   border-right: 1px solid var(--border);
   cursor: pointer;
   user-select: none;
   font-size: 12px;
   max-width: 220px;
+  min-height: 36px;
 }
 .tab:hover { background: rgba(255,255,255,0.05); }
 .tab.active {
   background: var(--tab-active-bg);
   border-top: 2px solid var(--accent);
-  padding-top: 4px;
+  padding-top: 2px;
 }
 .tab-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  flex: 1;
 }
 .tab-status {
   width: 8px; height: 8px; border-radius: 50%;
@@ -217,29 +238,32 @@ code {
   50% { opacity: 0.35; }
 }
 
-.tab-close {
-  background: transparent;
-  border: none;
-  color: var(--text-dim);
-  cursor: pointer;
-  padding: 0 4px;
-  font-size: 16px;
-  line-height: 1;
-  border-radius: 3px;
-}
-.tab-close:hover { background: rgba(255,255,255,0.1); color: var(--text); }
-
+/* A1: 24x24 minimum target. gap on tab keeps misclicks low. */
+.tab-close,
 .tab-kill {
   background: transparent;
   border: none;
   color: var(--text-dim);
   cursor: pointer;
-  padding: 0 4px;
-  font-size: 12px;
+  padding: 2px;
   line-height: 1;
   border-radius: 3px;
+  min-width: 24px;
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
-.tab-kill:hover:not(:disabled) { background: rgba(220,80,80,0.18); color: var(--danger); }
+.tab-close { font-size: 16px; }
+.tab-kill  { font-size: 12px; }
+.tab-close:hover:not(:disabled) { background: rgba(255,255,255,0.1); color: var(--text); }
+.tab-kill:hover:not(:disabled)  { background: rgba(220,80,80,0.18); color: var(--danger); }
+.tab-kill.armed {
+  background: rgba(248,113,113,0.18);
+  color: var(--danger);
+  /* Subtle pulse so the armed state reads as "act now". */
+  animation: pulse 1.4s ease-in-out infinite;
+}
 .tab-kill:disabled,
 .tab-close:disabled { opacity: 0.4; cursor: not-allowed; }
 
@@ -255,6 +279,7 @@ code {
   inset: 0;
   padding: 6px;
   display: flex;
+  flex-direction: column;
 }
 .pane.hidden { display: none; }
 .pane-host-inner {
@@ -269,6 +294,32 @@ code {
 .pane .xterm-screen {
   height: 100% !important;
 }
+
+/* ---- inline banner (A4) ----------------------------------------------- */
+
+.inline-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  font-size: 12px;
+  border-radius: 4px;
+  margin-bottom: 6px;
+  min-height: 32px;
+  border: 1px solid var(--border);
+}
+.banner-warn {
+  background: rgba(251,191,36,0.10);
+  border-color: rgba(251,191,36,0.35);
+  color: var(--text);
+}
+.banner-error {
+  background: rgba(248,113,113,0.12);
+  border-color: rgba(248,113,113,0.4);
+  color: var(--text);
+}
+.banner-icon { font-size: 14px; }
+.banner-text { flex: 1; }
 
 /* ---- overlays --------------------------------------------------------- */
 
@@ -319,6 +370,11 @@ code {
   border-color: var(--accent);
 }
 .btn.primary:hover { background: #2563eb; }
+.btn-sm {
+  padding: 3px 8px;
+  font-size: 11px;
+  border-radius: 3px;
+}
 
 /* ---- welcome ---------------------------------------------------------- */
 
@@ -342,28 +398,68 @@ code {
 .welcome-inner p { color: var(--text-dim); line-height: 1.6; }
 .welcome-inner .muted { font-size: 12px; }
 
-/* ---- toast ------------------------------------------------------------ */
+/* ---- toast (A5) ------------------------------------------------------- */
 
-.toast {
+.toast-stack {
   position: fixed;
   bottom: 20px;
   right: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 100;
+  pointer-events: none;
+  max-width: 360px;
+}
+
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   background: #1a1f26;
   border: 1px solid var(--border);
-  padding: 10px 14px;
+  border-left-width: 3px;
+  padding: 10px 12px;
   border-radius: 4px;
-  max-width: 360px;
   font-size: 12px;
   opacity: 0;
   transform: translateY(8px);
   transition: opacity .18s, transform .18s;
-  pointer-events: none;
-  z-index: 100;
+  pointer-events: auto;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.35);
 }
 .toast.show {
   opacity: 1;
   transform: translateY(0);
 }
+.toast-info    { border-left-color: var(--accent); }
+.toast-warning { border-left-color: var(--warn); }
+.toast-error   { border-left-color: var(--danger); }
+.toast-success { border-left-color: var(--ok); }
+
+.toast-message { flex: 1; }
+.toast-action {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  cursor: pointer;
+  padding: 3px 8px;
+  border-radius: 3px;
+  font-size: 11px;
+}
+.toast-action:hover { background: rgba(255,255,255,0.08); }
+.toast-close {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 3px;
+  min-width: 20px;
+}
+.toast-close:hover { color: var(--text); background: rgba(255,255,255,0.08); }
 
 /* ---- error boundary --------------------------------------------------- */
 
@@ -375,4 +471,71 @@ code {
   justify-content: center;
   background: rgba(0,0,0,0.5);
   z-index: 1000;
+}
+
+/* ---- hamburger + drawer (A8) ------------------------------------------ */
+
+.hamburger {
+  display: none;
+  position: fixed;
+  top: 6px;
+  left: 6px;
+  z-index: 60;
+  background: var(--tab-bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 16px;
+  border-radius: 4px;
+  min-width: 32px;
+  min-height: 32px;
+  align-items: center;
+  justify-content: center;
+}
+.hamburger:hover { background: rgba(255,255,255,0.06); }
+
+.drawer-backdrop {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.45);
+  z-index: 40;
+}
+
+.app.narrow .hamburger { display: inline-flex; }
+.app.narrow .workspace { padding-top: 44px; }
+
+/* Hide the toggle while the drawer is open so it doesn't sit on top
+ * of the sidebar header. ESC / backdrop / picking a session all close
+ * the drawer, so the user isn't trapped. */
+.app.drawer-open .hamburger { display: none; }
+
+@media (max-width: 800px) {
+  .app .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 100vh;
+    transform: translateX(-100%);
+    transition: transform 0.18s ease;
+    z-index: 50;
+    box-shadow: 4px 0 20px rgba(0,0,0,0.4);
+  }
+  .app.drawer-open .sidebar {
+    transform: translateX(0);
+  }
+  .app.drawer-open .drawer-backdrop {
+    display: block;
+  }
+}
+
+/* Wide-screen manual collapse: hide sidebar entirely. */
+.app.sidebar-hidden .sidebar {
+  display: none;
+}
+.app.sidebar-hidden .hamburger {
+  display: inline-flex;
+}
+.app.sidebar-hidden .workspace {
+  padding-top: 44px;
 }

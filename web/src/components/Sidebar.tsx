@@ -6,17 +6,28 @@ interface Props {
   openTabs: Tab[];
   onOpen: (entry: C2Entry) => void;
   onRefresh: () => void;
+  // Drawer mode invoked by hamburger button (A8). Sidebar itself doesn't
+  // need to know it's in a drawer; we just want to optionally auto-close
+  // on selection.
+  onSessionSelected?: () => void;
 }
 
 // Sidebar shows raw C2Entry list. We don't filter pending entries out —
 // surfacing them (disabled) is more informative than hiding them.
-export default function Sidebar({ sessions, activeUuid, openTabs, onOpen, onRefresh }: Props) {
+export default function Sidebar({
+  sessions,
+  activeUuid,
+  openTabs,
+  onOpen,
+  onRefresh,
+  onSessionSelected,
+}: Props) {
   const openSet = new Set(openTabs.map((t) => t.claudeUuid));
   return (
-    <aside className="sidebar">
+    <aside className="sidebar" aria-label="Sessions">
       <header className="sidebar-header">
         <h1>Sessions</h1>
-        <button className="icon-btn" onClick={onRefresh} title="Refresh">
+        <button className="icon-btn" onClick={onRefresh} title="Refresh" aria-label="Refresh sessions">
           ↻
         </button>
       </header>
@@ -30,38 +41,56 @@ export default function Sidebar({ sessions, activeUuid, openTabs, onOpen, onRefr
             const pending = !s.claudeUuid;
             const isActive = !pending && s.claudeUuid === activeUuid;
             const isOpen = !pending && openSet.has(s.claudeUuid);
+            const className =
+              'session' +
+              (isActive ? ' active' : '') +
+              (pending ? ' disabled' : '') +
+              (isOpen && !isActive ? ' open' : '');
+            const cwdLabel = s.cwd || '';
+            if (pending) {
+              // Non-interactive: not focusable, no role="button". Tooltip
+              // explains *why* it's disabled rather than just looking dim.
+              return (
+                <li
+                  key={s.id}
+                  className={className}
+                  aria-disabled="true"
+                  title="Session pending: Claude UUID will link on next `c2`"
+                >
+                  <div className="session-name">
+                    {s.name || s.id}
+                    <span className="badge">pending</span>
+                  </div>
+                  <div className="session-cwd">{cwdLabel}</div>
+                </li>
+              );
+            }
             return (
               <li
                 key={s.id}
-                className={
-                  'session' +
-                  (isActive ? ' active' : '') +
-                  (pending ? ' disabled' : '') +
-                  (isOpen && !isActive ? ' open' : '')
-                }
-                onClick={() => !pending && onOpen(s)}
+                className={className}
+                onClick={() => {
+                  onOpen(s);
+                  onSessionSelected?.();
+                }}
                 onKeyDown={(e) => {
-                  if (pending) return;
                   if (e.key === 'Enter' || e.key === ' ') {
                     e.preventDefault();
                     onOpen(s);
+                    onSessionSelected?.();
                   }
                 }}
-                tabIndex={pending ? -1 : 0}
+                tabIndex={0}
                 role="button"
-                aria-disabled={pending}
                 aria-current={isActive ? 'true' : undefined}
-                title={pending ? 'Pending — no Claude UUID yet' : s.cwd}
+                title={cwdLabel}
               >
                 <div className="session-name">
                   {s.name || s.id}
-                  {pending && <span className="badge">pending</span>}
-                  {isOpen && !pending && <span className="dot" />}
+                  {isOpen && <span className="dot" aria-label="Open in tab" />}
                 </div>
-                <div className="session-cwd">{s.cwd}</div>
-                {!pending && (
-                  <div className="session-uuid">{s.claudeUuid.slice(0, 8)}</div>
-                )}
+                <div className="session-cwd">{cwdLabel}</div>
+                <div className="session-uuid">{s.claudeUuid.slice(0, 8)}</div>
               </li>
             );
           })}
