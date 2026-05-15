@@ -25,32 +25,48 @@ exposes none. Server only has archive. Both sides need work.
 
 ### D-1 — Server: missing REST endpoints
 
-Add (all under existing same-origin CSRF check):
-- `GET  /api/sessions?archived=true` — list archived. Already have the
-  active list; reuse handler with a query param.
-- `PATCH /api/sessions/:id  { "name": "<new>" }` — rename.
-- `DELETE /api/sessions/:id` — remove entry. Refuse with 409 if the
-  PTY for this session is live in the manager unless `?force=1`. On
-  force, kick + kill before removing.
+All addressed by c2 id (8 hex), consistent with the existing
+`/api/sessions/:id/archive` and `/api/sessions/:id/pty` routes (see
+`GUI-DESIGN.md` §ID contract). All under the same-origin CSRF guard.
+
+- `GET  /api/sessions?archived=true&include=live` — list. `archived`
+  flips active vs archived view; `include=live` adds a boolean `live`
+  field per entry (`manager.has(uuid)`). Folding `live` into the list
+  avoids the extra `pty-status` round-trip the earlier draft proposed.
+- `PATCH /api/sessions/:id  { "name": "<new>" }` — rename. Server
+  validates non-empty, ≤ 80 chars.
+- `DELETE /api/sessions/:id` — remove. 409 if PTY live unless
+  `?force=1`; on force, kick + kill before removing.
 - `POST /api/sessions  { "cwd": "/abs/path", "name": "<opt>" }` — new
-  c2-session, returns the created entry. Does **not** spawn claude —
-  the user then clicks it to open a tab, and the WS handler spawns
-  claude on attach as today.
+  c2-session entry. **Pending-UUID handling: option (b), see D-7.**
 - `POST /api/sessions/:id/bind  { "claudeUuid": "<uuid>" }` — adopt
-  an existing Claude session (server-side equivalent of `c2 bind`).
+  an existing Claude session. Re-check inside `Mutate` that the uuid
+  isn't already bound (lift the pattern from `cmdBind` in c2-bin).
 
 All routes go through `usecase.*` so the CLI and server share the
-mutation path. Where a use-case doesn't exist yet (rename, remove),
-add it under `core/usecase/` so the CLI can switch over too.
+mutation path. Where a use-case doesn't exist yet (rename, remove,
+new, bind), add it under `core/usecase/` so the CLI can switch over
+too.
 
 flock contract unchanged: every write goes through
 `archivejson.Store.Mutate`.
 
-### D-2 — Server: list unbound Claude sessions for "Bind" UI
+Tests required: rename empty/over-length, rename collision (same
+name OK — we don't require unique names — but verify), remove
+without force when PTY live → 409, remove with force kicks PTY,
+bind on already-bound uuid (second caller loses), bind under
+concurrent attach.
 
-`GET /api/claude-sessions` returning the result of `claudefs.Scan`
-filtered to those whose uuid isn't already bound to a c2 entry. Used
-by the Bind dialog in D-5.
+### D-2 — Server: claude-side listing + cwd suggestions
+
+`GET /api/claude-sessions` returns:
+- `unbound`: result of `claudefs.Scan` filtered to uuids not present
+  in any c2 entry. Powers the Bind dialog in D-5.
+- `cwds`: deduped recent cwds across both c2 entries and Claude's raw
+  storage, ordered by recency. Powers the cwd picker in D-5.
+
+One endpoint instead of two to keep the dialog's loading state
+simple.
 
 ### D-3 — Client: row-level actions
 
@@ -67,6 +83,11 @@ Menu items:
 - Archive / Unarchive (toggle label based on current state)
 - Remove… (two-step confirm; warns if PTY live)
 - Copy uuid / Copy cwd
+
+Invariants:
+- **Only one menu open at a time.** Opening a second closes the first.
+- ESC closes the menu and restores focus to the originating row.
+- Menu uses the focus-trap pattern from Bucket A's overlay.
 
 ### D-4 — Client: view toggle Active ⇄ Archived
 
@@ -89,25 +110,80 @@ small inline form:
 On submit, POST to the appropriate route, refresh the list, and
 auto-open the new tab.
 
-The new-session form is **not a modal**. It's an inline expansion of
-the sidebar (between the segmented control and the list), to match
-the thin-wrapper, low-friction philosophy.
+The new-session form is **not a modal** on desktop. It's an inline
+expansion of the sidebar (between the segmented control and the
+list).
+
+In drawer mode (< 800 px viewport), the sidebar is only 280 px wide
+and fights with the cwd dropdown. Fallback: open the form as a small
+centered modal in that mode, using the Bucket A modal pattern (focus
+trap + ESC + auto-focus first input).
 
 ### D-6 — Client: "Remove" guard rail
 
 Remove is destructive (drops the entry; `c2 rm` already warns when
 server is running and PTY is live). In the GUI:
 - Two-step confirm in the menu (button turns red "Confirm?").
-- If `manager.has(uuid)` per a tiny `GET /api/sessions/:id/pty-status`
-  hint, show "PTY is live" in the menu next to Remove — and require
-  `force` on the DELETE call.
+- The list already carries `live` (from `?include=live` in D-1), so
+  the menu item reads "Remove… (PTY live — force)" when applicable
+  and the DELETE call sends `?force=1`.
+
+### D-7 — Pending-UUID handling for "New session"
+
+This is the load-bearing design call for the whole bucket. Today
+`handleSessionPTY` 409s on entries with empty `claudeUuid`, and
+`ptyrunner.Start` always runs `claude --resume <uuid>`. A freshly
+created entry has no uuid yet.
+
+Three options were on the table; we pick **(b)** — accept the
+complexity because the UX otherwise is broken.
+
+(a) Server-side `lazyLink` on every list/attach. Cheap to implement
+but doesn't help the very first attach: at that point Claude hasn't
+written any JSONL for this cwd yet, so there's nothing to link.
+Doesn't solve the dead-end on its own.
+
+(b) **Chosen.** `ptyrunner.Start` accepts an empty uuid: if empty,
+it runs `claude` (no `--resume`) in the cwd. The ptymgr keys this
+session by **c2 id** for the duration the uuid is empty, then
+upgrades to keying by ClaudeUUID once Claude writes its first JSONL
+(`claudefs` watcher or a poll every 500 ms for ~20 s after spawn).
+On upgrade, the server PATCHes the c2 entry with the discovered
+uuid via `Mutate`. Existing list polling picks the new uuid up.
+
+(c) Forbid "New" in the GUI until the user has used the CLI to
+create a session. Defeats the point of the GUI for new users.
+
+Implementation order inside D:
+1. ptyrunner: accept empty uuid, spawn `claude` no-resume.
+2. ptymgr: add a c2-id-keyed slot for "uuid-pending" sessions; key
+   migration on uuid discovery.
+3. claudefs: watcher / poller that returns "new uuids since T" in a
+   given cwd.
+4. server: discovery loop after Attach for pending sessions; PATCH
+   entry on first match.
+5. handleSessionPTY: when entry has empty uuid, dispatch to ptymgr
+   in pending mode instead of 409.
+
+This is **~1 day on its own**, which is why D's total estimate
+revised below.
 
 ### Effort & risk
 
-~1 day server, ~1 day client. Risk: medium — the new-session cwd
-picker is the only meaty UI piece; everything else is form/menu/list
-work. The new server use-cases need basic tests (rename collision,
-remove with live PTY, bind to a uuid already bound).
+~3–4 days total (was 2; underestimate caught in review). Breakdown:
+- D-1 + D-2 server endpoints + use-cases + tests: ~1 day.
+- D-7 pending-uuid handling: ~1 day.
+- D-3 + D-4 + D-5 + D-6 client UI: ~1–2 days.
+
+Risks:
+- D-7's uuid-upgrade race (user sends stdin before Claude finishes
+  writing JSONL) needs handling — stdin must be buffered until
+  upgrade or the spawn is fully transparent.
+- Concurrent CLI + GUI: flock makes writes atomic, but the GUI
+  polls list every 5 s, so it can show ≤ 5 s stale state after a
+  CLI rename / archive. Acceptable; document in the README later.
+- Rename / remove use-cases need tests (collision, validation,
+  live-PTY refusal).
 
 ---
 
@@ -224,6 +300,14 @@ Pick 2–3 of these. They're independent.
 ptymgr and a `GET /api/sessions/:id/activity` (or piggyback on a
 heartbeat WS). Risk: cost — cap to live PTYs only, ≤ 1 update/sec.
 
+**Thin-wrapper note:** this introduces transient *derived* state in
+`ptymgr` (bytes/sec counter) that doesn't exist in any Claude file.
+Acceptable under the rule because (a) it's purely in-memory, never
+written to disk, never owned by cc; (b) it disappears with the
+server. We update `GUI-DESIGN.md` to bless transient derived state
+in ptymgr the same way the scrollback ring is blessed today, before
+shipping this. If that update is rejected, drop C-1.
+
 ### C-2 — Last-frame preview on sidebar hover
 
 600 ms hover delay → a 40 × 6 char tooltip showing the last 6 lines
@@ -247,7 +331,11 @@ open.
 
 User-configured regex per session (or global). Match against PTY
 output; show a small numeric badge on inactive tabs whose match count
-incremented. Clears on tab focus. Config in a settings panel (defer).
+incremented. Clears on tab focus.
+
+Config stored client-side only (localStorage) for v1 — doesn't sync
+across machines, and is never persisted server-side. Settings panel
+deferred.
 
 ### Effort
 
@@ -286,17 +374,36 @@ deps unless P-1's fuzzy matcher really needs one.
 
 ## Implementation order (concrete)
 
-1. **D-1, D-2** — server endpoints + use-cases + tests. One PR.
+P-3 was moved to land before B because every B item that binds a key
+(`/` for search, `⌘B` for sidebar toggle, etc.) wants the registry —
+sequencing the registry first prevents scattered ad-hoc handlers we
+would have to refactor anyway.
+
+1. **D-1, D-2, D-7** — server endpoints + use-cases + tests +
+   pending-uuid handling. One PR.
 2. **D-3, D-4, D-5, D-6** — client UI for the new endpoints. One PR.
-3. **B-1, B-5, B-6, B-8** — status bar, welcome rebuild, scrollbars,
+3. **P-3** — shortcut registry + global key dispatcher (no new
+   shortcuts shipped yet). One small PR to unblock B.
+4. **B-1, B-5, B-6, B-8** — status bar, welcome rebuild, scrollbars,
    typography. One PR ("production shell, visible parts").
-4. **B-2, B-3, B-4, B-7** — search, resizable sidebar, tab overflow,
-   motion. One PR ("production shell, behavior parts").
-5. **P-3 → P-1, P-2** — shortcut registry, palette, cheatsheet. One
-   PR.
-6. **C-3** (cwd tinting) — small, immediate visual win. One PR.
-7. **C-1** (sparkline) or **C-2** (preview) — pick one based on appetite.
-8. **C-4** (zen fade), **C-5** (mention badge) — optional.
+5. **B-2, B-3, B-4, B-7** — search, resizable sidebar, tab overflow,
+   motion. All using the P-3 registry. One PR ("behavior parts").
+6. **P-1, P-2** — palette + cheatsheet on top of P-3. One PR.
+7. **C-3** (cwd tinting) — small, immediate visual win. One PR.
+8. **C-1** (sparkline) or **C-2** (preview) — pick one based on
+   appetite. Update `GUI-DESIGN.md` before C-1.
+9. **C-4** (zen fade), **C-5** (mention badge) — optional.
 
 After each PR: counter-review (visual + a11y + perf if relevant). The
 flow that worked in Phases 1–4 stays.
+
+### Items intentionally not in this plan
+
+- `c2 -1 <query>` auto-resume CLI equivalent — Sidebar filter (B-2)
+  + Enter on the only match is good enough. No bespoke shortcut.
+- Session group / folder in the sidebar — UX-REVIEW C suggested it;
+  deferred to a later cycle. Quick filter + groups by cwd basename
+  inside the existing list is the smaller next step if we ever pick
+  this up.
+- URL-routed tabs (reload restores tabs) — bigger than it looks;
+  separate cycle.
