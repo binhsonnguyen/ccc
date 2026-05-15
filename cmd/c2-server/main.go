@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"c2/adapters/archivejson"
+	"c2/adapters/claudefs"
 	"c2/core"
 	"c2/core/usecase"
 	"c2/internal/ptymgr"
@@ -35,9 +36,10 @@ import (
 )
 
 var (
-	store   = archivejson.New()
-	manager = ptymgr.New()
-	webFS   = webdev.FS()
+	store    = archivejson.New()
+	manager  = ptymgr.New()
+	claudeFS = claudefs.New()
+	webFS    = webdev.FS()
 )
 
 // portFileCleanup is installed by run() once the discovery file exists,
@@ -94,9 +96,23 @@ func run() error {
 	originHost := fmt.Sprintf("127.0.0.1:%d", port)
 	originHostAlt := fmt.Sprintf("localhost:%d", port)
 
+	// Wire the discovery → bind hook BEFORE we accept any WS attach.
+	// When a pending session's uuid surfaces in claudefs, PATCH the c2
+	// entry so subsequent /api/sessions list reflects the link.
+	manager.SetUUIDDiscoveredHook(func(sessionKey, newUUID string) {
+		if _, err := usecase.Bind(store, sessionKey, newUUID); err != nil {
+			fmt.Fprintf(os.Stderr, "c2-server: discovery bind %s → %s failed: %v\n",
+				sessionKey, newUUID, err)
+		} else {
+			fmt.Fprintf(os.Stderr, "c2-server: discovery: %s → %s\n",
+				sessionKey, shortUUID(newUUID))
+		}
+	})
+
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/sessions", handleSessions)
+	mux.HandleFunc("/api/sessions", handleSessionsCollection(originHost, originHostAlt))
 	mux.HandleFunc("/api/sessions/", routeSession(originHost, originHostAlt))
+	mux.HandleFunc("/api/claude-sessions", handleClaudeSessions)
 	mux.HandleFunc("/assets/", handleAssets)
 	mux.HandleFunc("/", handleIndex)
 
@@ -153,17 +169,91 @@ func run() error {
 // HTTP routes
 // ---------------------------------------------------------------------------
 
-func handleSessions(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
+// handleSessionsCollection serves /api/sessions:
+//   - GET: list active (or archived with ?archived=true), optionally with
+//     per-entry `live` field (?include=live).
+//   - POST: create a new pending entry from {cwd, name}. CSRF-guarded.
+func handleSessionsCollection(originHost, originHostAlt string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			handleListSessions(w, r)
+		case http.MethodPost:
+			if !checkSameOrigin(w, r, originHost, originHostAlt) {
+				return
+			}
+			handleCreateSession(w, r)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
 	}
+}
+
+func handleListSessions(w http.ResponseWriter, r *http.Request) {
 	f, err := store.Load()
 	if err != nil {
 		httpError(w, err, http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, f.ListActive())
+	archived := r.URL.Query().Get("archived") == "true"
+	includeLive := r.URL.Query().Get("include") == "live"
+
+	var entries []core.C2Entry
+	if archived {
+		entries = f.ListArchived()
+	} else {
+		entries = f.ListActive()
+	}
+
+	if !includeLive {
+		writeJSON(w, entries)
+		return
+	}
+	// Anonymous struct: embeds C2Entry plus a `live` boolean. Marshalled
+	// JSON ends up with `live` as a sibling field thanks to the embedded
+	// promotion + anonymous wrapper.
+	type entryWithLive struct {
+		core.C2Entry
+		Live bool `json:"live"`
+	}
+	out := make([]entryWithLive, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, entryWithLive{C2Entry: e, Live: manager.HasUUID(e.ClaudeUUID)})
+	}
+	writeJSON(w, out)
+}
+
+func handleCreateSession(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		CWD  string `json:"cwd"`
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	entry, err := usecase.NewEntry(store, body.CWD, body.Name)
+	if err != nil {
+		mapUsecaseError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(entry)
+}
+
+// mapUsecaseError translates usecase sentinels into HTTP status codes.
+func mapUsecaseError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, usecase.ErrNotFound):
+		http.Error(w, err.Error(), http.StatusNotFound)
+	case errors.Is(err, usecase.ErrPTYLive), errors.Is(err, usecase.ErrAlreadyBound):
+		http.Error(w, err.Error(), http.StatusConflict)
+	case errors.Is(err, usecase.ErrValidation):
+		http.Error(w, err.Error(), http.StatusBadRequest)
+	default:
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
 }
 
 // routeSession dispatches /api/sessions/:id and /api/sessions/:id/{archive,pty}.
@@ -183,12 +273,34 @@ func routeSession(originHost, originHostAlt string) http.HandlerFunc {
 		}
 		switch sub {
 		case "":
-			handleSessionGet(w, r, id)
+			// GET (read one), PATCH (rename), DELETE (remove). Mutating
+			// methods are CSRF-guarded.
+			switch r.Method {
+			case http.MethodGet:
+				handleSessionGet(w, r, id)
+			case http.MethodPatch:
+				if !checkSameOrigin(w, r, originHost, originHostAlt) {
+					return
+				}
+				handleSessionPatch(w, r, id)
+			case http.MethodDelete:
+				if !checkSameOrigin(w, r, originHost, originHostAlt) {
+					return
+				}
+				handleSessionDelete(w, r, id)
+			default:
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			}
 		case "archive":
 			if !checkSameOrigin(w, r, originHost, originHostAlt) {
 				return
 			}
 			handleSessionArchive(w, r, id)
+		case "bind":
+			if !checkSameOrigin(w, r, originHost, originHostAlt) {
+				return
+			}
+			handleSessionBind(w, r, id)
 		case "pty":
 			handleSessionPTY(w, r, id, originHost, originHostAlt)
 		default:
@@ -236,6 +348,95 @@ func handleSessionGet(w http.ResponseWriter, r *http.Request, id string) {
 	writeJSON(w, e)
 }
 
+func handleSessionPatch(w http.ResponseWriter, r *http.Request, id string) {
+	var body struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	entry, err := usecase.Rename(store, id, body.Name)
+	if err != nil {
+		mapUsecaseError(w, err)
+		return
+	}
+	writeJSON(w, entry)
+}
+
+func handleSessionDelete(w http.ResponseWriter, r *http.Request, id string) {
+	force := r.URL.Query().Get("force") == "1" || r.URL.Query().Get("force") == "true"
+	if err := usecase.Remove(store, id, force, manager); err != nil {
+		mapUsecaseError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func handleSessionBind(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		ClaudeUUID string `json:"claudeUuid"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	entry, err := usecase.Bind(store, id, body.ClaudeUUID)
+	if err != nil {
+		mapUsecaseError(w, err)
+		return
+	}
+	writeJSON(w, entry)
+}
+
+// handleClaudeSessions returns the bind dialog's data set: unbound claude
+// sessions (uuids not yet adopted by any c2 entry) plus a deduped cwd
+// recency list across both c2 entries and Claude's raw storage.
+func handleClaudeSessions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	ss, err := claudeFS.Scan()
+	if err != nil {
+		httpError(w, err, http.StatusInternalServerError)
+		return
+	}
+	f, err := store.Load()
+	if err != nil {
+		httpError(w, err, http.StatusInternalServerError)
+		return
+	}
+	unbound := f.UnboundClaudeSessions(ss)
+
+	// Merge cwds: c2-entry cwds first (ListAll preserves CreatedAt-desc
+	// order), then claudefs cwds. Dedup keeping first occurrence.
+	seen := map[string]bool{}
+	var cwds []string
+	for _, e := range f.ListAll() {
+		if e.CWD == "" || seen[e.CWD] {
+			continue
+		}
+		seen[e.CWD] = true
+		cwds = append(cwds, e.CWD)
+	}
+	for _, s := range ss {
+		if s.Sidechain || s.CWD == "" || seen[s.CWD] {
+			continue
+		}
+		seen[s.CWD] = true
+		cwds = append(cwds, s.CWD)
+	}
+	writeJSON(w, map[string]any{
+		"unbound": unbound,
+		"cwds":    cwds,
+	})
+}
+
 func handleSessionArchive(w http.ResponseWriter, r *http.Request, id string) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -264,9 +465,11 @@ func handleSessionPTY(w http.ResponseWriter, r *http.Request, id, originHost, or
 		http.NotFound(w, r)
 		return
 	}
-	if e.ClaudeUUID == "" {
-		http.Error(w, "session has no claude uuid yet", http.StatusConflict)
-		return
+	// Pending-uuid path: key by c2 id, spawn claude (no resume), let the
+	// discovery loop fill in the uuid later (D-7).
+	sessionKey := e.ClaudeUUID
+	if sessionKey == "" {
+		sessionKey = e.ID
 	}
 
 	// 2. Accept the WS, restricting origin to our own loopback URL. Local-only
@@ -289,7 +492,7 @@ func handleSessionPTY(w http.ResponseWriter, r *http.Request, id, originHost, or
 	conn.SetReadLimit(64 * 1024)
 
 	client := newWSClient(conn)
-	sess, err := manager.Attach(e.ClaudeUUID, e.CWD, client)
+	sess, err := manager.Attach(sessionKey, e.CWD, e.ClaudeUUID, client)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pty[%s]: attach failed: %v\n", id, err)
 		_ = client.WriteControl(map[string]any{"type": "error", "message": err.Error()})
@@ -481,6 +684,16 @@ func writeJSON(w http.ResponseWriter, v any) {
 
 func httpError(w http.ResponseWriter, err error, code int) {
 	http.Error(w, err.Error(), code)
+}
+
+// shortUUID returns the first 8 chars of uuid for log lines, falling
+// back to the full string if shorter. Guards against test injection of
+// tiny uuids that would otherwise panic on [:8].
+func shortUUID(u string) string {
+	if len(u) >= 8 {
+		return u[:8]
+	}
+	return u
 }
 
 // Ensure core import isn't dropped — needed for ToggleArchive's return type.

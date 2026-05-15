@@ -69,6 +69,74 @@ func (r *Repo) Scan() ([]core.Session, error) {
 	return sessions, nil
 }
 
+// ScanProject scans ONLY the Claude project directory corresponding to
+// `cwd`, returning sessions found there. Used by the ptymgr discovery
+// loop to avoid the full-tree Scan() cost on every tick: a user with
+// many projects would otherwise pay O(N projects × full JSONL parse)
+// every 500 ms.
+//
+// Claude encodes project paths by replacing `/`, `.`, and `_` with `-`
+// (verified against an actual ~/.claude/projects listing). If the
+// encoded dir doesn't exist yet (e.g. claude hasn't written its first
+// JSONL for this cwd), returns an empty slice + nil error — the
+// discovery loop will retry on the next tick.
+func (r *Repo) ScanProject(cwd string) ([]core.Session, error) {
+	if cwd == "" {
+		return nil, nil
+	}
+	root, err := projectsRoot()
+	if err != nil {
+		return nil, err
+	}
+	dir := filepath.Join(root, encodeCWD(cwd))
+	info, err := os.Stat(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !info.IsDir() {
+		return nil, nil
+	}
+	out, err := scanProject(dir)
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Modified.After(out[j].Modified) })
+	return out, nil
+}
+
+// encodeCWD mirrors Claude's project-dir naming: /, ., _ → -.
+// Empirically verified; keep in sync with Claude if it ever changes.
+func encodeCWD(cwd string) string {
+	r := strings.NewReplacer("/", "-", ".", "-", "_", "-")
+	return r.Replace(cwd)
+}
+
+// Cwds returns deduped recent cwds across all Claude sessions, ordered by
+// the most-recent Modified time per cwd. Sidechain sessions are excluded.
+// Powers the "New session" cwd picker on both CLI and GUI.
+func (r *Repo) Cwds() ([]string, error) {
+	sessions, err := r.Scan()
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, s := range sessions {
+		if s.Sidechain || s.CWD == "" {
+			continue
+		}
+		if seen[s.CWD] {
+			continue
+		}
+		seen[s.CWD] = true
+		out = append(out, s.CWD)
+	}
+	return out, nil
+}
+
 func projectsRoot() (string, error) {
 	if h := os.Getenv("CLAUDE_HOME"); h != "" {
 		return filepath.Join(h, "projects"), nil

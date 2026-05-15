@@ -14,6 +14,12 @@ import (
 	"github.com/creack/pty"
 )
 
+// Start spawns `claude --resume <uuid>` in cwd when uuid is non-empty, or
+// just `claude` (no resume) when uuid is empty. The empty-uuid path is for
+// brand-new "New session" entries created from the GUI: claude assigns a
+// uuid on its own and writes the JSONL; ptymgr's discovery loop watches
+// claudefs for the new file and upgrades the c2 entry via usecase.Bind.
+
 // Session is a live PTY + child process pair. The caller owns the master
 // file: reading drains stdout/stderr; writing feeds stdin. Resize/Kill/Wait
 // mirror the standard PTY ops.
@@ -27,10 +33,14 @@ type Session struct {
 // path. Initial size is a sane default; the server will Resize() once the
 // browser reports its viewport.
 func Start(cwd, uuid string) (*Session, error) {
+	var cmd *exec.Cmd
 	if uuid == "" {
-		return nil, fmt.Errorf("ptyrunner: empty uuid")
+		// uuid empty = new session; claude will assign one and write its
+		// JSONL; the discovery loop in ptymgr upgrades the entry.
+		cmd = exec.Command("claude")
+	} else {
+		cmd = exec.Command("claude", "--resume", uuid)
 	}
-	cmd := exec.Command("claude", "--resume", uuid)
 	cmd.Dir = cwd
 	// Inherit env, force TERM so claude doesn't fall back to dumb.
 	env := os.Environ()

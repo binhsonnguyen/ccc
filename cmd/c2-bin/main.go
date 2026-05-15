@@ -246,14 +246,10 @@ func cmdRename(args []string) error {
 		return fmt.Errorf("usage: c2 rename <id> <new name...>")
 	}
 	newName := strings.Join(args[1:], " ")
-	if err := store.Mutate(func(f *core.ArchiveFile) error {
-		e := f.Find(args[0])
-		if e == nil {
-			return fmt.Errorf("no session with id %s", args[0])
-		}
-		e.Name = newName
-		return nil
-	}); err != nil {
+	if _, err := usecase.Rename(store, args[0], newName); err != nil {
+		// Preserve pre-PR error wording so users + tests see the same
+		// stderr line. The use-case wraps ErrNotFound with the id, which
+		// matches the previous "no session with id <id>" format.
 		return err
 	}
 	fmt.Fprintf(os.Stderr, "c2: renamed %s → %s\n", args[0], newName)
@@ -264,19 +260,20 @@ func cmdRemove(args []string) error {
 	if len(args) != 1 {
 		return fmt.Errorf("usage: c2 rm <id>")
 	}
-	var removedName string
-	if err := store.Mutate(func(f *core.ArchiveFile) error {
-		for i, e := range f.Sessions {
-			if e.ID == args[0] {
-				removedName = e.Name
-				f.Sessions = append(f.Sessions[:i], f.Sessions[i+1:]...)
-				// idempotent: removes id from archived list if present
-				f.RemoveArchived(args[0])
-				return nil
-			}
-		}
+	// CLI runs in-process without a PTY manager — pass nil to skip the
+	// live-PTY gate. The "server is running" hint below is the user's
+	// signal that a separate process may still have a live session.
+	// First fetch the name so the success line matches the pre-PR output.
+	f, err := store.Load()
+	if err != nil {
+		return err
+	}
+	e := f.Find(args[0])
+	if e == nil {
 		return fmt.Errorf("no session with id %s", args[0])
-	}); err != nil {
+	}
+	removedName := e.Name
+	if err := usecase.Remove(store, args[0], false, nil); err != nil {
 		return err
 	}
 	fmt.Fprintf(os.Stderr, "c2: removed %s (%s)\n", args[0], removedName)
