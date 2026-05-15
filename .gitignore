@@ -13,5 +13,8 @@
 web/node_modules
 web/dist
 /bin
+
+# Review agents drop screenshots here while inspecting the running app
+.review/
 # Note: internal/webdev/assets/ IS committed — it is the source-of-truth
 # for `go:embed` so a clean clone can `go build` without Node installed.
