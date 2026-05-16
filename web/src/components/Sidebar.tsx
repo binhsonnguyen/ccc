@@ -13,7 +13,9 @@ import type { C2Entry, Tab } from '../types';
 export type SidebarView = 'active' | 'archived';
 
 interface Props {
-  sessions: C2Entry[];
+  // null = initial load in flight (Sidebar renders skeleton). [] = loaded
+  // but empty. Array = loaded with entries.
+  sessions: C2Entry[] | null;
   activeUuid: string | null;
   openTabs: Tab[];
   view: SidebarView;
@@ -36,7 +38,19 @@ interface Props {
   // other component) to open the inline new-session form. Effect below
   // watches it via dependency array.
   openNewSessionTick?: number;
+  // B-3: width control. App owns the value (persists to localStorage),
+  // Sidebar owns the drag interaction.
+  width: number;
+  onWidthChange: (w: number) => void;
+  // Drawer mode hides the handle (sidebar is fixed-position 280px).
+  resizable: boolean;
 }
+
+const SIDEBAR_W_MIN = 200;
+const SIDEBAR_W_MAX = 480;
+const SIDEBAR_W_DEFAULT = 280;
+const clampWidth = (w: number) =>
+  Math.max(SIDEBAR_W_MIN, Math.min(SIDEBAR_W_MAX, Math.round(w)));
 
 interface MenuState {
   rowId: string;
@@ -58,9 +72,70 @@ export default function Sidebar({
   narrow,
   showToast,
   openNewSessionTick,
+  width,
+  onWidthChange,
+  resizable,
 }: Props) {
+  // Resize drag state. We don't put `dragging` in React state (would
+  // rerender on every mouse move); we mark the DOM with a class for the
+  // visual feedback instead.
+  const dragStartRef = useRef<{ x: number; w: number } | null>(null);
+  const resizerRef = useRef<HTMLDivElement | null>(null);
+
+  const onResizerMouseDown = (e: React.MouseEvent) => {
+    if (!resizable) return;
+    e.preventDefault();
+    dragStartRef.current = { x: e.clientX, w: width };
+    resizerRef.current?.classList.add('dragging');
+    document.body.style.cursor = 'col-resize';
+    // Prevent text-selection flicker during drag.
+    document.body.style.userSelect = 'none';
+    const onMove = (ev: MouseEvent) => {
+      const start = dragStartRef.current;
+      if (!start) return;
+      const next = clampWidth(start.w + (ev.clientX - start.x));
+      onWidthChange(next);
+    };
+    const onUp = () => {
+      dragStartRef.current = null;
+      resizerRef.current?.classList.remove('dragging');
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
+  const onResizerDblClick = () => {
+    if (!resizable) return;
+    onWidthChange(SIDEBAR_W_DEFAULT);
+  };
+  const onResizerKeyDown = (e: React.KeyboardEvent) => {
+    if (!resizable) return;
+    if (e.key === 'ArrowLeft') {
+      e.preventDefault();
+      onWidthChange(clampWidth(width - 10));
+    } else if (e.key === 'ArrowRight') {
+      e.preventDefault();
+      onWidthChange(clampWidth(width + 10));
+    } else if (e.key === 'Home') {
+      e.preventDefault();
+      onWidthChange(SIDEBAR_W_MIN);
+    } else if (e.key === 'End') {
+      e.preventDefault();
+      onWidthChange(SIDEBAR_W_MAX);
+    } else if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      onWidthChange(SIDEBAR_W_DEFAULT);
+    }
+  };
   const openSet = new Set(openTabs.map((t) => t.claudeUuid));
   const [menu, setMenu] = useState<MenuState | null>(null);
+  // Filter (B-2). Local + transient: not persisted across reloads — the
+  // sidebar's job is to surface sessions, not remember a search.
+  const [filter, setFilter] = useState('');
+  const filterInputRef = useRef<HTMLInputElement | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   // Set transiently when Esc dismisses the rename input; blur fires after
   // unmount and would otherwise commit the draft (PATCH). Read+reset in
@@ -286,7 +361,7 @@ export default function Sidebar({
     const li = el.closest<HTMLElement>('li.session[data-row-id]');
     const rid = li?.dataset.rowId;
     if (!rid) return null;
-    return sessions.find((s) => s.id === rid) ?? null;
+    return sessions?.find((s) => s.id === rid) ?? null;
   };
   const rowWhen = () => focusedRowEntry() !== null && !renamingId;
   useShortcut(
@@ -360,13 +435,78 @@ export default function Sidebar({
 
   const currentMenuItems = menu
     ? (() => {
-        const s = sessions.find((x) => x.id === menu.rowId);
+        const s = sessions?.find((x) => x.id === menu.rowId);
         return s ? buildMenu(s) : [];
       })()
     : [];
 
+  // Filter shortcut (B-2). `/` focuses the input. Guarded so we don't
+  // steal the key while xterm or any input has focus — xterm.onData
+  // already swallows printables when its viewport is focused, but a
+  // body-focus state would otherwise hijack a `/` the user typed into,
+  // say, the new-session name field.
+  useShortcut(
+    {
+      id: 'sidebar.filter.focus',
+      keys: '/',
+      scope: 'global',
+      label: 'Filter sessions',
+      when: () => {
+        const el = document.activeElement as HTMLElement | null;
+        if (!el) return true;
+        const tag = el.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA') return false;
+        if (el.isContentEditable) return false;
+        // xterm renders its own focusable textarea inside .xterm — caught
+        // by the INPUT/TEXTAREA check above. Belt-and-braces: refuse if
+        // the focus is anywhere inside an xterm host.
+        if (el.closest('.xterm')) return false;
+        return true;
+      },
+      handler: () => filterInputRef.current?.focus(),
+    },
+    [],
+  );
+
+  // Apply filter to the visible list. Combined "name + cwd" substring,
+  // case-insensitive. We keep the original sessions array intact for
+  // shortcut lookups (focusedRowEntry, menu rowId resolution) — those
+  // shouldn't break just because a row got hidden by filter.
+  const q = filter.trim().toLowerCase();
+  const visibleSessions = q && sessions
+    ? sessions.filter((s) => {
+        const hay = ((s.name || '') + ' ' + (s.cwd || '')).toLowerCase();
+        return hay.includes(q);
+      })
+    : sessions;
+
+  // Inline width override only in wide mode — narrow / drawer keeps the
+  // fixed 280px from CSS so the slide-in math doesn't depend on a JS var.
+  const asideStyle = resizable ? { width: `${width}px`, flexBasis: `${width}px` } : undefined;
+
   return (
-    <aside className="sidebar" aria-label="Sessions">
+    <aside
+      className="sidebar"
+      aria-label="Sessions"
+      style={asideStyle}
+    >
+      {resizable && (
+        <div
+          ref={resizerRef}
+          className="sidebar-resizer"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize sidebar"
+          aria-valuenow={width}
+          aria-valuemin={SIDEBAR_W_MIN}
+          aria-valuemax={SIDEBAR_W_MAX}
+          tabIndex={0}
+          onMouseDown={onResizerMouseDown}
+          onDoubleClick={onResizerDblClick}
+          onKeyDown={onResizerKeyDown}
+          title="Drag to resize · double-click to reset"
+        />
+      )}
       <header className="sidebar-header">
         <h1>Sessions</h1>
         <button
@@ -405,6 +545,45 @@ export default function Sidebar({
           >
             Archived
           </button>
+        </div>
+
+        <div className="sidebar-filter">
+          <span className="sidebar-filter-icon" aria-hidden="true">⌕</span>
+          <input
+            ref={filterInputRef}
+            type="text"
+            className="sidebar-filter-input"
+            placeholder="filter sessions… (/)"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') {
+                e.preventDefault();
+                if (filter) setFilter('');
+                else (e.target as HTMLInputElement).blur();
+              }
+              // Don't let single-letter row shortcuts (r/a) fire while
+              // the user is typing in the filter — registry's `when`
+              // already guards on focused-row, but stopPropagation here
+              // keeps the keydown contract crystal clear.
+              e.stopPropagation();
+            }}
+            aria-label="Filter sessions"
+          />
+          {filter && (
+            <button
+              type="button"
+              className="sidebar-filter-clear"
+              onClick={() => {
+                setFilter('');
+                filterInputRef.current?.focus();
+              }}
+              aria-label="Clear filter"
+              tabIndex={-1}
+            >
+              ×
+            </button>
+          )}
         </div>
 
         <button
@@ -448,20 +627,31 @@ export default function Sidebar({
         />
       )}
 
-      {sessions.length === 0 ? (
+      {sessions === null ? (
+        <ul className="session-list" aria-busy="true" aria-label="Loading sessions">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <li key={i} className="session session-skeleton" aria-hidden="true">
+              <div className="skeleton-line skeleton-line-name" />
+              <div className="skeleton-line skeleton-line-cwd" />
+            </li>
+          ))}
+        </ul>
+      ) : visibleSessions && visibleSessions.length === 0 ? (
         <div className="empty-hint">
-          {view === 'archived'
-            ? 'No archived sessions.'
-            : (
-              <>
-                No sessions yet. Run <code>claude</code> in your terminal, or click{' '}
-                <em>+ New session</em>.
-              </>
-            )}
+          {q ? (
+            <>No sessions match <code>{filter}</code>.</>
+          ) : view === 'archived' ? (
+            'No archived sessions.'
+          ) : (
+            <>
+              No sessions yet. Run <code>claude</code> in your terminal, or click{' '}
+              <em>+ New session</em>.
+            </>
+          )}
         </div>
       ) : (
         <ul className="session-list">
-          {sessions.map((s) => {
+          {(visibleSessions ?? []).map((s) => {
             const pending = !s.claudeUuid;
             const isActive = !pending && s.claudeUuid === activeUuid;
             const isOpen = !pending && openSet.has(s.claudeUuid);

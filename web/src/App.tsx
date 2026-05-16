@@ -12,6 +12,54 @@ import type { C2Entry, Tab, TabStatus } from './types';
 
 const NARROW_BP = 800;
 const SIDEBAR_LS_KEY = 'cc-terminal:sidebar-open';
+const SIDEBAR_WIDTH_LS_KEY = 'cc-terminal:sidebar-width';
+const TAB_ORDER_SS_KEY = 'cc-terminal:tab-order';
+const SIDEBAR_WIDTH_DEFAULT = 280;
+const SIDEBAR_WIDTH_MIN = 200;
+const SIDEBAR_WIDTH_MAX = 480;
+
+function readSidebarWidth(): number {
+  try {
+    const v = localStorage.getItem(SIDEBAR_WIDTH_LS_KEY);
+    if (v) {
+      const n = parseInt(v, 10);
+      if (Number.isFinite(n) && n >= SIDEBAR_WIDTH_MIN && n <= SIDEBAR_WIDTH_MAX) {
+        return n;
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return SIDEBAR_WIDTH_DEFAULT;
+}
+
+function writeSidebarWidth(n: number) {
+  try {
+    localStorage.setItem(SIDEBAR_WIDTH_LS_KEY, String(n));
+  } catch {
+    /* ignore */
+  }
+}
+
+function readTabOrder(): string[] {
+  try {
+    const v = sessionStorage.getItem(TAB_ORDER_SS_KEY);
+    if (!v) return [];
+    const arr = JSON.parse(v);
+    if (Array.isArray(arr) && arr.every((s) => typeof s === 'string')) return arr;
+  } catch {
+    /* ignore */
+  }
+  return [];
+}
+
+function writeTabOrder(uuids: string[]) {
+  try {
+    sessionStorage.setItem(TAB_ORDER_SS_KEY, JSON.stringify(uuids));
+  } catch {
+    /* ignore */
+  }
+}
 
 function readSidebarPref(): boolean | null {
   try {
@@ -33,7 +81,9 @@ function writeSidebarPref(v: boolean) {
 }
 
 function AppInner() {
-  const [sessions, setSessions] = useState<C2Entry[]>([]);
+  // null = initial fetch in flight (Sidebar renders skeleton); [] = empty.
+  const [sessions, setSessions] = useState<C2Entry[] | null>(null);
+  const [sidebarWidth, setSidebarWidth] = useState<number>(() => readSidebarWidth());
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeUuid, setActiveUuid] = useState<string | null>(null);
   const [view, setView] = useState<SidebarView>('active');
@@ -83,6 +133,10 @@ function AppInner() {
       );
     } catch (err) {
       console.error(err);
+      // Flip skeleton off into an empty state so the user sees the
+      // sidebar's "no sessions" hint plus the Retry toast, instead of
+      // shimmer rows hanging forever when the very first fetch fails.
+      setSessions((prev) => prev ?? []);
       showToast('Failed to load sessions', {
         variant: 'error',
         action: { label: 'Retry', onClick: () => void refresh() },
@@ -147,6 +201,28 @@ function AppInner() {
     });
   }, []);
 
+  // ⌘B / Ctrl+B toggles the sidebar (B-3). Works in wide mode (hide /
+  // show via .sidebar-hidden) and in drawer mode (open / close drawer).
+  //
+  // `when` excludes the case where xterm has focus — on Linux/Windows
+  // Mod resolves to Ctrl, and Ctrl+B is the tmux prefix + the bash
+  // backward-char binding. Stealing it from the terminal would silently
+  // break common workflows.
+  useShortcut(
+    {
+      id: 'sidebar.toggle',
+      keys: 'Mod+b',
+      scope: 'global',
+      label: 'Toggle sidebar',
+      when: () => {
+        const el = document.activeElement as HTMLElement | null;
+        return !el?.closest('.xterm');
+      },
+      handler: () => toggleSidebar(),
+    },
+    [toggleSidebar],
+  );
+
   const closeDrawer = useCallback(() => {
     if (!narrow) return;
     setSidebarOpen(false);
@@ -186,6 +262,54 @@ function AppInner() {
     },
     [tabs],
   );
+
+  // Reorder lifted from TabBar (B-4). New uuid list = the dragged tab
+   // inserted at a new index. We map back into the Tab[] array — uuids
+   // not present in `next` (stale) are dropped, uuids present but not in
+   // current tabs (shouldn't happen) are ignored.
+  const reorderTabs = useCallback((nextUuids: string[]) => {
+    setTabs((prev) => {
+      const byUuid = new Map(prev.map((t) => [t.claudeUuid, t]));
+      const reordered: Tab[] = [];
+      for (const u of nextUuids) {
+        const t = byUuid.get(u);
+        if (t) {
+          reordered.push(t);
+          byUuid.delete(u);
+        }
+      }
+      // Append any tabs that weren't in nextUuids (defensive — keeps
+      // them from vanishing if caller passed an incomplete list).
+      for (const t of byUuid.values()) reordered.push(t);
+      writeTabOrder(reordered.map((t) => t.claudeUuid));
+      return reordered;
+    });
+  }, []);
+
+  // Persist tab order whenever it changes, and rehydrate once on first
+  // mount. Rehydration only reorders existing tabs (per-window session
+  // storage; tabs themselves don't survive a reload — but if a future
+  // change does add URL routing, this'll Just Work).
+  const orderHydratedRef = useRef(false);
+  useEffect(() => {
+    if (!orderHydratedRef.current && tabs.length > 0) {
+      orderHydratedRef.current = true;
+      const saved = readTabOrder();
+      if (saved.length > 0) {
+        setTabs((prev) => {
+          const rank = new Map(saved.map((u, i) => [u, i]));
+          const sorted = [...prev].sort((a, b) => {
+            const ra = rank.has(a.claudeUuid) ? rank.get(a.claudeUuid)! : 1e9;
+            const rb = rank.has(b.claudeUuid) ? rank.get(b.claudeUuid)! : 1e9;
+            return ra - rb;
+          });
+          return sorted;
+        });
+      }
+      return;
+    }
+    writeTabOrder(tabs.map((t) => t.claudeUuid));
+  }, [tabs]);
 
   const killTab = useCallback(
     (uuid: string) => {
@@ -304,6 +428,12 @@ function AppInner() {
       )}
       <div className="sidebar-wrap" id="primary-sidebar">
         <Sidebar
+          width={sidebarWidth}
+          onWidthChange={(w) => {
+            setSidebarWidth(w);
+            writeSidebarWidth(w);
+          }}
+          resizable={!narrow}
           sessions={sessions}
           activeUuid={activeUuid}
           openTabs={tabs}
@@ -326,6 +456,7 @@ function AppInner() {
           onSelect={setActiveUuid}
           onClose={closeTab}
           onKill={killTab}
+          onReorder={reorderTabs}
         />
         <div className="pane-host">
           {tabs.length === 0 ? (

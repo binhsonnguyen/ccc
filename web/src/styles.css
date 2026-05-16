@@ -170,6 +170,7 @@ code {
   cursor: pointer;
   border-left: 2px solid transparent;
   user-select: none;
+  transition: background-color 80ms ease-out;
 }
 .session:hover { background: rgba(255,255,255,0.04); }
 .session.active { background: rgba(59,130,246,0.12); border-left-color: var(--accent); }
@@ -251,6 +252,10 @@ code {
   max-width: 220px;
   min-height: 36px;
 }
+.tab {
+  transition: background-color 80ms ease-out, opacity 80ms ease-out;
+  animation: tabIn 120ms ease-out;
+}
 .tab:hover { background: rgba(255,255,255,0.05); }
 .tab.active {
   background: var(--tab-active-bg);
@@ -266,6 +271,7 @@ code {
 .tab-status {
   width: 8px; height: 8px; border-radius: 50%;
   flex: 0 0 8px;
+  transition: background-color 200ms ease-out;
 }
 .status-connecting { background: var(--warn); animation: pulse 1.2s ease-in-out infinite; }
 .status-pending    { background: var(--warn); animation: pulse 1.2s ease-in-out infinite; }
@@ -1097,6 +1103,206 @@ code {
   color: var(--text-dim);
 }
 .statusbar-uuid { color: var(--text-faint); }
+/* ---- sidebar filter (B-2) -------------------------------------------- */
+
+.sidebar-filter {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.sidebar-filter-icon {
+  position: absolute;
+  left: 7px;
+  color: var(--text-faint);
+  font-size: 12px;
+  pointer-events: none;
+  line-height: 1;
+}
+.sidebar-filter-input {
+  flex: 1;
+  width: 100%;
+  background: rgba(0, 0, 0, 0.18);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 5px 22px 5px 22px;
+  font: inherit;
+  font-size: var(--text-sm);
+  border-radius: 3px;
+  outline: none;
+  min-width: 0;
+}
+.sidebar-filter-input::placeholder { color: var(--text-faint); }
+.sidebar-filter-input:focus {
+  border-color: var(--accent);
+  background: rgba(0, 0, 0, 0.28);
+}
+.sidebar-filter-clear {
+  position: absolute;
+  right: 4px;
+  background: transparent;
+  border: none;
+  color: var(--text-faint);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px 5px;
+  border-radius: 3px;
+}
+.sidebar-filter-clear:hover { color: var(--text); background: rgba(255,255,255,0.08); }
+
+/* ---- sidebar resize handle (B-3) ------------------------------------ */
+
+.sidebar { position: relative; }
+.sidebar-resizer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 4px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 5;
+  background: transparent;
+  transition: background-color 120ms ease-out;
+}
+.sidebar-resizer:hover,
+.sidebar-resizer:focus-visible,
+.sidebar-resizer.dragging {
+  background: var(--accent);
+  outline: none;
+}
+
+/* ---- skeleton rows (B-7) -------------------------------------------- */
+
+.session-skeleton {
+  cursor: default;
+}
+.session-skeleton:hover { background: transparent; }
+.skeleton-line {
+  height: 10px;
+  border-radius: 3px;
+  background: linear-gradient(
+    90deg,
+    rgba(255,255,255,0.04) 0%,
+    rgba(255,255,255,0.10) 50%,
+    rgba(255,255,255,0.04) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.4s linear infinite;
+}
+.skeleton-line-name { width: 60%; margin-bottom: 6px; }
+.skeleton-line-cwd  { width: 85%; height: 8px; }
+
+@keyframes shimmer {
+  0% { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
+}
+
+/* ---- tabbar overflow + DnD (B-4) ------------------------------------ */
+
+.tabbar-wrap {
+  position: relative;
+  display: flex;
+  background: var(--tab-bg);
+  border-bottom: 1px solid var(--border);
+  min-height: 36px;
+}
+.tabbar-wrap > .tabbar { border-bottom: none; min-height: 36px; }
+.tabbar.has-overflow {
+  -webkit-mask-image: linear-gradient(to right, black calc(100% - 24px), transparent);
+          mask-image: linear-gradient(to right, black calc(100% - 24px), transparent);
+  padding-right: 32px;
+}
+.tabbar-chevron {
+  position: absolute;
+  top: 0;
+  right: 0;
+  height: 36px;
+  width: 28px;
+  background: var(--tab-bg);
+  border: none;
+  border-left: 1px solid var(--border);
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 14px;
+  z-index: 6;
+}
+.tabbar-chevron:hover { color: var(--text); background: rgba(255,255,255,0.06); }
+
+.tabbar-overflow-menu {
+  position: absolute;
+  top: 36px;
+  right: 0;
+  z-index: 30;
+  background: #1f2227;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px;
+  min-width: 220px;
+  max-height: 320px;
+  overflow-y: auto;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  animation: overlayIn 150ms ease-out;
+}
+.tabbar-overflow-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-sm);
+  text-align: left;
+  padding: 5px 8px;
+  border-radius: 3px;
+  cursor: pointer;
+  width: 100%;
+}
+.tabbar-overflow-item:hover { background: rgba(59,130,246,0.18); }
+.tabbar-overflow-item.active { background: rgba(59,130,246,0.12); }
+.tabbar-overflow-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+/* DnD visuals */
+.tab.dragging { opacity: 0.5; }
+.tab.drag-over-left  { box-shadow: inset 2px 0 0 var(--accent); }
+.tab.drag-over-right { box-shadow: inset -2px 0 0 var(--accent); }
+
+/* ---- motion keyframes (B-7) ----------------------------------------- */
+
+@keyframes tabIn {
+  from { opacity: 0; transform: translateX(-4px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+@keyframes overlayIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes bannerIn {
+  from { opacity: 0; transform: translateY(-2px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.overlay { animation: overlayIn 150ms ease-out; }
+.inline-banner { animation: bannerIn 120ms ease-out; }
+
+/* ---- prefers-reduced-motion: kill all transitions/animations ------- */
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 .statusbar kbd {
   font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
   font-size: var(--text-2xs);
