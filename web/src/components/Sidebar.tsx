@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import SessionRowMenu, { type MenuItem } from './SessionRowMenu';
 import NewSessionForm from './NewSessionForm';
 import {
@@ -32,6 +32,10 @@ interface Props {
     msg: string,
     opts?: { variant?: 'info' | 'error' | 'warning' | 'success' },
   ) => void;
+  // Counter from App: each increment is a request from Welcome (or any
+  // other component) to open the inline new-session form. Effect below
+  // watches it via dependency array.
+  openNewSessionTick?: number;
 }
 
 interface MenuState {
@@ -53,6 +57,7 @@ export default function Sidebar({
   onCloseTabFor,
   narrow,
   showToast,
+  openNewSessionTick,
 }: Props) {
   const openSet = new Set(openTabs.map((t) => t.claudeUuid));
   const [menu, setMenu] = useState<MenuState | null>(null);
@@ -64,6 +69,17 @@ export default function Sidebar({
   const renameCancelledRef = useRef(false);
   const [renameDraft, setRenameDraft] = useState('');
   const [creating, setCreating] = useState(false);
+  // Effect-driven: Welcome's "New" card increments the tick and we
+  // open the form. Skip the initial mount (tick=0 baseline) so this
+  // doesn't pop the form open on first render.
+  const firstTickRef = useRef(true);
+  useEffect(() => {
+    if (firstTickRef.current) {
+      firstTickRef.current = false;
+      return;
+    }
+    if (openNewSessionTick !== undefined) setCreating(true);
+  }, [openNewSessionTick]);
   const rowRefs = useRef<Map<string, HTMLLIElement | null>>(new Map());
 
   const closeMenuLocal = useCallback(() => {

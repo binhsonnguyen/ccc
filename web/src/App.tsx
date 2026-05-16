@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Sidebar, { type SidebarView } from './components/Sidebar';
+import StatusBar from './components/StatusBar';
 import TabBar from './components/TabBar';
 import TerminalPane from './components/TerminalPane';
 import Welcome from './components/Welcome';
@@ -36,6 +37,11 @@ function AppInner() {
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeUuid, setActiveUuid] = useState<string | null>(null);
   const [view, setView] = useState<SidebarView>('active');
+  // Increments whenever Welcome asks Sidebar to open the new-session
+  // form. Sidebar watches this counter via effect and toggles its own
+  // `creating` state. Counter (not bool) so repeated clicks always
+  // re-trigger even when Sidebar already had it open then closed.
+  const [openNewSessionTick, setOpenNewSessionTick] = useState(0);
 
   // Sidebar/drawer state. Default: respect user pref if set, otherwise
   // open on wide viewports, closed on narrow.
@@ -310,6 +316,7 @@ function AppInner() {
           onCloseTabFor={closeTab}
           narrow={narrow}
           showToast={showToast}
+          openNewSessionTick={openNewSessionTick}
         />
       </div>
       <main className="workspace">
@@ -322,7 +329,19 @@ function AppInner() {
         />
         <div className="pane-host">
           {tabs.length === 0 ? (
-            <Welcome />
+            <Welcome
+              onNewSession={() => {
+                // Surface drawer on narrow viewports so the form has a
+                // place to mount (Sidebar's narrow path drops it below
+                // the row list as a separate panel).
+                if (narrow) {
+                  setSidebarOpen(true);
+                  userTouched.current = true;
+                  writeSidebarPref(true);
+                }
+                setOpenNewSessionTick((n) => n + 1);
+              }}
+            />
           ) : (
             tabs.map((tab) => (
               <TerminalPane
@@ -339,6 +358,44 @@ function AppInner() {
             ))
           )}
         </div>
+        {(() => {
+          const active = tabs.find((t) => t.claudeUuid === activeUuid) ?? null;
+          // Hash status string into a number — StatusBar only uses pulse
+          // as a "did this change?" signal to reset its idle timer.
+          let pulse = 0;
+          if (active) {
+            for (let i = 0; i < active.status.length; i++) {
+              pulse = (pulse * 31 + active.status.charCodeAt(i)) | 0;
+            }
+          }
+          return (
+            <StatusBar
+              activeTab={active}
+              pulse={pulse}
+              onCopyCwd={(cwd) => {
+                if (!cwd) return;
+                // Clipboard requires a secure context. Loopback HTTP
+                // counts as secure on Chromium but not always on Safari
+                // / older browsers — fall back to an error toast so we
+                // don't claim "Copied" when nothing happened.
+                if (!navigator.clipboard) {
+                  showToast('Copy failed — clipboard unavailable', {
+                    variant: 'error',
+                  });
+                  return;
+                }
+                navigator.clipboard
+                  .writeText(cwd)
+                  .then(() => showToast('Copied cwd', { variant: 'info' }))
+                  .catch(() =>
+                    showToast('Copy failed — permission denied', {
+                      variant: 'error',
+                    }),
+                  );
+              }}
+            />
+          );
+        })()}
       </main>
     </div>
   );
