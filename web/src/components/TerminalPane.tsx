@@ -10,6 +10,8 @@ interface Props {
   onStatus: (uuid: string, status: TabStatus) => void;
   onKicked: (uuid: string) => void;
   onExit: (uuid: string, code: number) => void;
+  onPending: (uuid: string) => void;
+  onReady: (uuid: string) => void;
   onClose: (uuid: string) => void;
 }
 
@@ -23,6 +25,8 @@ export default function TerminalPane({
   onStatus,
   onKicked,
   onExit,
+  onPending,
+  onReady,
   onClose,
 }: Props) {
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -80,6 +84,16 @@ export default function TerminalPane({
           if (!msg) return;
           if (msg.type === 'kicked') onKicked(uuid);
           else if (msg.type === 'exit') onExit(uuid, msg.code);
+          else if (msg.type === 'pending') {
+            // Server is spawning `claude` no-resume; disable input until
+            // ready arrives so we don't lose keystrokes the runner won't
+            // route to the not-yet-launched child.
+            entry.term.options.disableStdin = true;
+            onPending(uuid);
+          } else if (msg.type === 'ready') {
+            entry.term.options.disableStdin = false;
+            onReady(uuid);
+          }
           return;
         }
         entry.term.write(new Uint8Array(ev.data as ArrayBuffer));
@@ -90,7 +104,7 @@ export default function TerminalPane({
       };
       ws.onerror = () => onStatus(uuid, 'error');
     },
-    [onStatus, onKicked, onExit],
+    [onStatus, onKicked, onExit, onPending, onReady],
   );
 
   useEffect(() => {
@@ -211,6 +225,16 @@ export default function TerminalPane({
       role="tabpanel"
       aria-labelledby={tabId(tab.claudeUuid)}
     >
+      {tab.status === 'pending' && visible && (
+        <div className="inline-banner banner-pending" role="status">
+          <span className="banner-icon" aria-hidden="true">
+            <span className="spinner" />
+          </span>
+          <span className="banner-text">
+            Starting Claude — waiting for session uuid…
+          </span>
+        </div>
+      )}
       {transportProblem && visible && (
         <div
           className={'inline-banner banner-' + (tab.status === 'error' ? 'error' : 'warn')}

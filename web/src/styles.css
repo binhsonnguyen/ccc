@@ -227,6 +227,7 @@ code {
   flex: 0 0 8px;
 }
 .status-connecting { background: var(--warn); animation: pulse 1.2s ease-in-out infinite; }
+.status-pending    { background: var(--warn); animation: pulse 1.2s ease-in-out infinite; }
 .status-connected  { background: var(--ok); }
 .status-disconnected { background: var(--text-dim); }
 .status-kicked    { background: var(--danger); }
@@ -331,6 +332,12 @@ code {
   align-items: center;
   justify-content: center;
   z-index: 10;
+}
+/* Portal-mounted overlay (drawer-mode form modal): centred against the
+   whole viewport, above the drawer/backdrop stack. */
+.overlay.overlay-fixed {
+  position: fixed;
+  z-index: 80;
 }
 .overlay-card {
   background: #1f2227;
@@ -527,6 +534,343 @@ code {
   .app.drawer-open .drawer-backdrop {
     display: block;
   }
+}
+
+/* ---- D-3/4/5 sidebar additions --------------------------------------- */
+
+.sidebar-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.segmented {
+  display: flex;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px;
+}
+.segmented-btn {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font-size: 11px;
+  padding: 4px 0;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.segmented-btn:hover { color: var(--text); }
+.segmented-btn.active {
+  background: var(--tab-bg);
+  color: var(--text);
+}
+
+.new-session-btn {
+  background: transparent;
+  border: 1px dashed var(--border);
+  color: var(--text-dim);
+  padding: 5px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.new-session-btn:hover { color: var(--text); border-color: var(--text-faint); }
+.new-session-btn.active {
+  color: var(--text);
+  border-style: solid;
+  background: rgba(255, 255, 255, 0.04);
+}
+.new-session-chev { font-size: 10px; color: var(--text-faint); }
+
+/* ---- new-session form ------------------------------------------------ */
+
+.newsession-form {
+  background: rgba(0,0,0,0.18);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.newsession-form.is-drawer { background: transparent; border: none; padding: 0; }
+.newsession-modal { min-width: min(420px, 86vw); max-width: 92vw; padding: 14px; }
+
+.newsession-tabs {
+  display: flex;
+  gap: 2px;
+  background: rgba(255,255,255,0.04);
+  padding: 2px;
+  border-radius: 3px;
+}
+.newsession-tab {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font-size: 11px;
+  padding: 4px 0;
+  border-radius: 2px;
+  cursor: pointer;
+}
+.newsession-tab.active {
+  background: var(--tab-bg);
+  color: var(--text);
+}
+
+.newsession-body { display: flex; flex-direction: column; gap: 8px; }
+
+.field { display: flex; flex-direction: column; gap: 2px; }
+.field-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+}
+.field input[type="text"] {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 5px 7px;
+  font-size: 12px;
+  border-radius: 3px;
+  font-family: inherit;
+  width: 100%;
+}
+.field input[type="text"]:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.field-cwd { position: relative; }
+
+.cwd-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  max-height: 200px;
+  overflow-y: auto;
+  background: #1f2227;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  list-style: none;
+  margin: 2px 0 0;
+  padding: 2px;
+  z-index: 30;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.4);
+}
+.cwd-option {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font-size: 11px;
+  padding: 4px 6px;
+  border-radius: 2px;
+  cursor: pointer;
+  font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cwd-option:hover { background: rgba(59,130,246,0.12); }
+
+.newsession-error {
+  color: var(--danger);
+  font-size: 11px;
+  background: rgba(248,113,113,0.08);
+  padding: 4px 6px;
+  border-radius: 3px;
+}
+
+.newsession-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.bind-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 240px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.bind-row {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 6px 8px;
+  border-radius: 3px;
+  cursor: pointer;
+  font: inherit;
+}
+.bind-row:hover { background: rgba(59,130,246,0.12); border-color: var(--accent); }
+.bind-row:disabled { opacity: 0.5; cursor: not-allowed; }
+.bind-row-cwd {
+  font-size: 11px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.bind-row-meta {
+  display: flex;
+  gap: 8px;
+  margin-top: 2px;
+  font-size: 10px;
+  color: var(--text-dim);
+}
+.bind-row-uuid {
+  font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+}
+.bind-row-msg {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---- session row menu trigger ----------------------------------------- */
+
+.session { position: relative; }
+.session-name-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+.session-menu-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 0 4px;
+  font-size: 14px;
+  line-height: 1;
+  margin-left: auto;
+  border-radius: 3px;
+  min-width: 22px;
+  min-height: 22px;
+  opacity: 0;
+  transition: opacity 0.08s ease-out;
+}
+.session:hover .session-menu-btn,
+.session:focus-within .session-menu-btn,
+.session-menu-btn:focus-visible {
+  opacity: 1;
+}
+.session-menu-btn:hover { color: var(--text); background: rgba(255,255,255,0.08); }
+
+/* Pending rows: clickable (D-7 spawn flow). Slight dim + the badge tells
+   the user opening will create a new PTY rather than reattach. */
+.session.pending { opacity: 0.82; }
+
+.rename-input {
+  flex: 1;
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  color: var(--text);
+  padding: 2px 5px;
+  font: inherit;
+  font-size: 12px;
+  border-radius: 2px;
+  outline: none;
+  min-width: 0;
+}
+
+.badge-live {
+  background: rgba(16,185,129,0.18);
+  color: var(--ok);
+}
+
+/* ---- row menu (D-3) --------------------------------------------------- */
+
+.row-menu {
+  background: #1f2227;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px;
+  min-width: 200px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  outline: none;
+}
+.row-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  justify-content: space-between;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  padding: 5px 8px;
+  border-radius: 3px;
+  cursor: pointer;
+  width: 100%;
+}
+.row-menu-item:disabled { color: var(--text-faint); cursor: not-allowed; }
+.row-menu-item:hover:not(:disabled),
+.row-menu-item.is-focused:not(:disabled) {
+  background: rgba(59,130,246,0.18);
+}
+.row-menu-item.is-danger { color: var(--danger); }
+.row-menu-item.is-armed {
+  background: rgba(248,113,113,0.2);
+  color: var(--danger);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+.row-menu-label { flex: 1; }
+.row-menu-hint {
+  color: var(--text-faint);
+  font-size: 10px;
+  font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+}
+.row-menu-sep {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 0;
+}
+
+/* ---- pending banner / spinner ---------------------------------------- */
+
+.banner-pending {
+  background: rgba(59,130,246,0.10);
+  border-color: rgba(59,130,246,0.35);
+  color: var(--text);
+}
+.spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(255,255,255,0.18);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  vertical-align: middle;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 
 /* Wide-screen manual collapse: hide sidebar entirely. */

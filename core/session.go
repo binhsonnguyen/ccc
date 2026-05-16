@@ -8,15 +8,19 @@ import (
 	"time"
 )
 
+// Session mirrors a Claude raw JSONL session. JSON tags are camelCase to
+// match the rest of the public API (see C2Entry); GET /api/claude-sessions
+// returns `unbound: []Session` and the web client deserialises via those
+// names. IndexPath/JSONLPath/GitBranch are internal-only — omit from wire.
 type Session struct {
-	UUID      string
-	CWD       string
-	Summary   string
-	GitBranch string
-	Modified  time.Time
-	IndexPath string
-	JSONLPath string
-	Sidechain bool
+	UUID      string    `json:"uuid"`
+	CWD       string    `json:"cwd"`
+	Summary   string    `json:"summary"`
+	GitBranch string    `json:"gitBranch,omitempty"`
+	Modified  time.Time `json:"modified"`
+	IndexPath string    `json:"-"`
+	JSONLPath string    `json:"-"`
+	Sidechain bool      `json:"sidechain,omitempty"`
 }
 
 type C2Entry struct {

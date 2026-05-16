@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import Sidebar from './components/Sidebar';
+import Sidebar, { type SidebarView } from './components/Sidebar';
 import TabBar from './components/TabBar';
 import TerminalPane from './components/TerminalPane';
 import Welcome from './components/Welcome';
@@ -34,6 +34,7 @@ function AppInner() {
   const [sessions, setSessions] = useState<C2Entry[]>([]);
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeUuid, setActiveUuid] = useState<string | null>(null);
+  const [view, setView] = useState<SidebarView>('active');
 
   // Sidebar/drawer state. Default: respect user pref if set, otherwise
   // open on wide viewports, closed on narrow.
@@ -54,8 +55,25 @@ function AppInner() {
   // ---- session list polling ------------------------------------------------
   const refresh = useCallback(async () => {
     try {
-      const data = await listSessions();
+      const data = await listSessions({
+        archived: view === 'archived',
+        includeLive: true,
+      });
       setSessions(data);
+      // Discovery upgrade: if any open tab is keyed by a c2 id (pending)
+      // and the server has now linked a uuid, swap the tab's keying so
+      // future reattach paths through the canonical uuid. We match by
+      // c2Id; this is cheap, runs every 5s, and is idempotent.
+      setTabs((prev) =>
+        prev.map((t) => {
+          if (t.claudeUuid && t.claudeUuid !== t.c2Id) return t;
+          const match = data.find((e) => e.id === t.c2Id);
+          if (match && match.claudeUuid && match.claudeUuid !== t.claudeUuid) {
+            return { ...t, claudeUuid: match.claudeUuid };
+          }
+          return t;
+        }),
+      );
     } catch (err) {
       console.error(err);
       showToast('Failed to load sessions', {
@@ -63,7 +81,7 @@ function AppInner() {
         action: { label: 'Retry', onClick: () => void refresh() },
       });
     }
-  }, [showToast]);
+  }, [showToast, view]);
 
   useEffect(() => {
     refresh();
@@ -124,20 +142,23 @@ function AppInner() {
   }, [narrow]);
 
   // ---- tab management ------------------------------------------------------
+  // We allow opening tabs for pending entries (claudeUuid empty). The
+  // server keys those PTYs by c2 id under the hood (D-7); on the client
+  // we use the c2 id as the tab's dedup key until refresh upgrades it.
   const openTab = useCallback((entry: C2Entry) => {
-    if (!entry.claudeUuid) return;
+    const key = entry.claudeUuid || entry.id;
     setTabs((prev) => {
-      if (prev.some((t) => t.claudeUuid === entry.claudeUuid)) return prev;
+      if (prev.some((t) => t.claudeUuid === key || t.c2Id === entry.id)) return prev;
       const t: Tab = {
-        claudeUuid: entry.claudeUuid,
+        claudeUuid: key,
         c2Id: entry.id,
         name: entry.name || entry.id,
         cwd: entry.cwd || '',
-        status: 'connecting',
+        status: entry.claudeUuid ? 'connecting' : 'pending',
       };
       return [...prev, t];
     });
-    setActiveUuid(entry.claudeUuid);
+    setActiveUuid(key);
   }, []);
 
   const closeTab = useCallback(
@@ -216,8 +237,29 @@ function AppInner() {
       prev.map((t) => {
         if (t.claudeUuid !== uuid) return t;
         if (t.status === 'kicked' || t.status === 'exited') return t;
+        // Don't downgrade pending → connected via ws.onopen; we only flip
+        // out of 'pending' when the server explicitly sends {type:'ready'}.
+        if (t.status === 'pending' && status === 'connected') return t;
         return { ...t, status };
       }),
+    );
+  }, []);
+
+  const onReady = useCallback(
+    (uuid: string) => {
+      setTabs((prev) =>
+        prev.map((t) => (t.claudeUuid === uuid ? { ...t, status: 'connected' } : t)),
+      );
+      showToast('Session ready.', { variant: 'success' });
+      // Pull the new uuid into the list / tab keying.
+      void refresh();
+    },
+    [refresh, showToast],
+  );
+
+  const onPending = useCallback((uuid: string) => {
+    setTabs((prev) =>
+      prev.map((t) => (t.claudeUuid === uuid ? { ...t, status: 'pending' } : t)),
     );
   }, []);
 
@@ -252,9 +294,15 @@ function AppInner() {
           sessions={sessions}
           activeUuid={activeUuid}
           openTabs={tabs}
+          view={view}
+          onViewChange={setView}
           onOpen={openTab}
           onRefresh={refresh}
           onSessionSelected={narrow ? closeDrawer : undefined}
+          onAfterMutate={refresh}
+          onCloseTabFor={closeTab}
+          narrow={narrow}
+          showToast={showToast}
         />
       </div>
       <main className="workspace">
@@ -271,12 +319,14 @@ function AppInner() {
           ) : (
             tabs.map((tab) => (
               <TerminalPane
-                key={tab.claudeUuid}
+                key={tab.c2Id}
                 tab={tab}
                 visible={tab.claudeUuid === activeUuid}
                 onStatus={onStatus}
                 onKicked={onKicked}
                 onExit={onExit}
+                onPending={onPending}
+                onReady={onReady}
                 onClose={closeTab}
               />
             ))
