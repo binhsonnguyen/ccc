@@ -5,6 +5,7 @@ import TerminalPane from './components/TerminalPane';
 import Welcome from './components/Welcome';
 import { ToastProvider, useToast } from './components/Toast';
 import { listSessions } from './lib/api';
+import { useShortcut } from './lib/shortcuts';
 import { disposeTerm, getTerm } from './lib/terminals';
 import type { C2Entry, Tab, TabStatus } from './types';
 
@@ -111,19 +112,25 @@ function AppInner() {
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
-  // ---- drawer key/click handlers (only when drawer-style) -----------------
-  useEffect(() => {
-    if (!narrow || !sidebarOpen) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
+  // ---- drawer ESC (only when drawer-style + open) -------------------------
+  // Migrated to the shortcut registry (PLAN.md P-3). `when` gates this
+  // entry to drawer mode + open state so it doesn't race with the
+  // terminal-dead overlay ESC handler in TerminalPane.
+  useShortcut(
+    {
+      id: 'drawer.close',
+      keys: 'Escape',
+      scope: 'global',
+      label: 'Close sidebar drawer',
+      when: () => narrow && sidebarOpen,
+      handler: () => {
         setSidebarOpen(false);
         userTouched.current = true;
         writeSidebarPref(false);
-      }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [narrow, sidebarOpen]);
+      },
+    },
+    [narrow, sidebarOpen],
+  );
 
   const toggleSidebar = useCallback(() => {
     setSidebarOpen((v) => {

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { closeMenu, openMenu, subscribeMenu } from '../lib/menuController';
+import { useShortcut } from '../lib/shortcuts';
 
 export interface MenuItem {
   id: string;
@@ -79,30 +80,24 @@ export default function SessionRowMenu({ id, x, y, items, onClose }: Props) {
     };
   }, [id, onClose]);
 
-  // Click-outside + ESC. Focus first focusable item on mount.
+  // Click-outside (not a key shortcut — stays as a document listener).
+  // ESC + Arrow/Home/End/Enter/Space are migrated to the shortcut
+  // registry below (scope 'menu-focused').
   useEffect(() => {
     const onDocClick = (e: MouseEvent) => {
       if (!menuRef.current) return;
       if (!menuRef.current.contains(e.target as Node)) onClose();
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        onClose();
-      }
     };
     // Defer so the click that opened the menu doesn't immediately close it.
     const handle = window.setTimeout(() => {
       document.addEventListener('mousedown', onDocClick);
       document.addEventListener('contextmenu', onDocClick);
     }, 0);
-    window.addEventListener('keydown', onKey);
     menuRef.current?.focus();
     return () => {
       window.clearTimeout(handle);
       document.removeEventListener('mousedown', onDocClick);
       document.removeEventListener('contextmenu', onDocClick);
-      window.removeEventListener('keydown', onKey);
       if (armTimerRef.current) window.clearTimeout(armTimerRef.current);
     };
   }, [onClose]);
@@ -120,27 +115,6 @@ export default function SessionRowMenu({ id, x, y, items, onClose }: Props) {
     },
     [focusable, focusIdx],
   );
-
-  const onKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      moveFocus(1);
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      moveFocus(-1);
-    } else if (e.key === 'Home') {
-      e.preventDefault();
-      if (focusable[0]) setFocusIdx(focusable[0].i);
-    } else if (e.key === 'End') {
-      e.preventDefault();
-      const last = focusable[focusable.length - 1];
-      if (last) setFocusIdx(last.i);
-    } else if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      const item = items[focusIdx];
-      if (item && !item.separator) fireItem(item);
-    }
-  };
 
   const fireItem = useCallback(
     (item: MenuItem) => {
@@ -168,6 +142,92 @@ export default function SessionRowMenu({ id, x, y, items, onClose }: Props) {
     [armedId, onClose],
   );
 
+  // Menu navigation (Arrow/Home/End/Enter/Space/Esc) — migrated to the
+  // shortcut registry (PLAN.md P-3) with scope 'menu-focused'. The
+  // menu element keeps focus (tabIndex=-1 + .focus() on mount) so the
+  // resolved scope while a menu is open is always 'menu-focused'.
+  useShortcut(
+    {
+      id: 'menu.down',
+      keys: 'ArrowDown',
+      scope: 'menu-focused',
+      label: 'Next menu item',
+      handler: () => moveFocus(1),
+    },
+    [moveFocus],
+  );
+  useShortcut(
+    {
+      id: 'menu.up',
+      keys: 'ArrowUp',
+      scope: 'menu-focused',
+      label: 'Previous menu item',
+      handler: () => moveFocus(-1),
+    },
+    [moveFocus],
+  );
+  useShortcut(
+    {
+      id: 'menu.home',
+      keys: 'Home',
+      scope: 'menu-focused',
+      label: 'First menu item',
+      handler: () => {
+        if (focusable[0]) setFocusIdx(focusable[0].i);
+      },
+    },
+    [focusable],
+  );
+  useShortcut(
+    {
+      id: 'menu.end',
+      keys: 'End',
+      scope: 'menu-focused',
+      label: 'Last menu item',
+      handler: () => {
+        const last = focusable[focusable.length - 1];
+        if (last) setFocusIdx(last.i);
+      },
+    },
+    [focusable],
+  );
+  useShortcut(
+    {
+      id: 'menu.activate.enter',
+      keys: 'Enter',
+      scope: 'menu-focused',
+      label: 'Activate menu item',
+      handler: () => {
+        const item = items[focusIdx];
+        if (item && !item.separator) fireItem(item);
+      },
+    },
+    [items, focusIdx, fireItem],
+  );
+  useShortcut(
+    {
+      id: 'menu.activate.space',
+      keys: ' ',
+      scope: 'menu-focused',
+      label: 'Activate menu item',
+      handler: () => {
+        const item = items[focusIdx];
+        if (item && !item.separator) fireItem(item);
+      },
+    },
+    [items, focusIdx, fireItem],
+  );
+  useShortcut(
+    {
+      id: 'menu.close',
+      keys: 'Escape',
+      scope: 'menu-focused',
+      label: 'Close menu',
+      handler: () => onClose(),
+    },
+    [onClose],
+  );
+
   // Viewport-aware positioning: avoid clipping at right/bottom edge.
   const style: React.CSSProperties = {
     position: 'fixed',
@@ -183,7 +243,6 @@ export default function SessionRowMenu({ id, x, y, items, onClose }: Props) {
       className="row-menu"
       role="menu"
       tabIndex={-1}
-      onKeyDown={onKeyDown}
       style={style}
       // Stop propagation so a right-click *inside* the menu doesn't
       // re-trigger the row's context handler.

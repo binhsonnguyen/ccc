@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useShortcut } from '../lib/shortcuts';
 import type { Tab } from '../types';
 
 interface Props {
@@ -64,53 +65,121 @@ export default function TabBar({ tabs, activeUuid, onSelect, onClose, onKill }: 
     if (el) el.focus();
   }, []);
 
+  // Enter/Space activate the focused tab — these are role="tab" button
+  // semantics, not app-level shortcuts. Keep them local.
   const onTabKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLDivElement>, uuid: string) => {
-      const idx = tabs.findIndex((t) => t.claudeUuid === uuid);
-      if (idx < 0) return;
-      switch (e.key) {
-        case 'ArrowLeft': {
-          e.preventDefault();
-          const next = tabs[(idx - 1 + tabs.length) % tabs.length];
-          onSelect(next.claudeUuid);
-          focusTab(next.claudeUuid);
-          break;
-        }
-        case 'ArrowRight': {
-          e.preventDefault();
-          const next = tabs[(idx + 1) % tabs.length];
-          onSelect(next.claudeUuid);
-          focusTab(next.claudeUuid);
-          break;
-        }
-        case 'Home': {
-          e.preventDefault();
-          onSelect(tabs[0].claudeUuid);
-          focusTab(tabs[0].claudeUuid);
-          break;
-        }
-        case 'End': {
-          e.preventDefault();
-          const last = tabs[tabs.length - 1];
-          onSelect(last.claudeUuid);
-          focusTab(last.claudeUuid);
-          break;
-        }
-        case 'Delete':
-        case 'Backspace': {
-          e.preventDefault();
-          onClose(uuid);
-          break;
-        }
-        case 'Enter':
-        case ' ': {
-          e.preventDefault();
-          onSelect(uuid);
-          break;
-        }
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        onSelect(uuid);
       }
     },
-    [tabs, onSelect, onClose, focusTab],
+    [onSelect],
+  );
+
+  // Arrow / Home / End / Delete / Backspace tab nav lives in the
+  // shortcut registry (PLAN.md P-3). Scope = 'tab-focused' so the
+  // entries are inert unless a `.tabbar` descendant has focus, which
+  // means the registry only fires when this tablist is the focused
+  // widget. The focused tab's uuid is read off `data-tab-uuid` on the
+  // role="tab" element.
+  const focusedUuid = (): string | null => {
+    const el = document.activeElement;
+    if (!el) return null;
+    const tabEl = el.closest<HTMLElement>('[data-tab-uuid]');
+    return tabEl?.dataset.tabUuid ?? null;
+  };
+
+  useShortcut(
+    {
+      id: 'tabbar.prev',
+      keys: 'ArrowLeft',
+      scope: 'tab-focused',
+      label: 'Previous tab',
+      handler: () => {
+        const uuid = focusedUuid();
+        if (uuid === null || tabs.length === 0) return;
+        const idx = tabs.findIndex((t) => t.claudeUuid === uuid);
+        if (idx < 0) return;
+        const next = tabs[(idx - 1 + tabs.length) % tabs.length];
+        onSelect(next.claudeUuid);
+        focusTab(next.claudeUuid);
+      },
+    },
+    [tabs, onSelect, focusTab],
+  );
+  useShortcut(
+    {
+      id: 'tabbar.next',
+      keys: 'ArrowRight',
+      scope: 'tab-focused',
+      label: 'Next tab',
+      handler: () => {
+        const uuid = focusedUuid();
+        if (uuid === null || tabs.length === 0) return;
+        const idx = tabs.findIndex((t) => t.claudeUuid === uuid);
+        if (idx < 0) return;
+        const next = tabs[(idx + 1) % tabs.length];
+        onSelect(next.claudeUuid);
+        focusTab(next.claudeUuid);
+      },
+    },
+    [tabs, onSelect, focusTab],
+  );
+  useShortcut(
+    {
+      id: 'tabbar.first',
+      keys: 'Home',
+      scope: 'tab-focused',
+      label: 'First tab',
+      handler: () => {
+        if (tabs.length === 0) return;
+        onSelect(tabs[0].claudeUuid);
+        focusTab(tabs[0].claudeUuid);
+      },
+    },
+    [tabs, onSelect, focusTab],
+  );
+  useShortcut(
+    {
+      id: 'tabbar.last',
+      keys: 'End',
+      scope: 'tab-focused',
+      label: 'Last tab',
+      handler: () => {
+        if (tabs.length === 0) return;
+        const last = tabs[tabs.length - 1];
+        onSelect(last.claudeUuid);
+        focusTab(last.claudeUuid);
+      },
+    },
+    [tabs, onSelect, focusTab],
+  );
+  useShortcut(
+    {
+      id: 'tabbar.close.delete',
+      keys: 'Delete',
+      scope: 'tab-focused',
+      label: 'Close focused tab',
+      handler: () => {
+        const uuid = focusedUuid();
+        if (uuid) onClose(uuid);
+      },
+    },
+    [onClose],
+  );
+  useShortcut(
+    {
+      id: 'tabbar.close.backspace',
+      keys: 'Backspace',
+      scope: 'tab-focused',
+      label: 'Close focused tab',
+      handler: () => {
+        const uuid = focusedUuid();
+        if (uuid) onClose(uuid);
+      },
+    },
+    [onClose],
   );
 
   if (tabs.length === 0) return <div className="tabbar empty" role="presentation" />;
@@ -127,6 +196,7 @@ export default function TabBar({ tabs, activeUuid, onSelect, onClose, onKill }: 
               tabRefs.current.set(t.claudeUuid, el);
             }}
             id={tabId(t.claudeUuid)}
+            data-tab-uuid={t.claudeUuid}
             className={'tab' + (isActive ? ' active' : '')}
             onClick={() => onSelect(t.claudeUuid)}
             onKeyDown={(e) => onTabKeyDown(e, t.claudeUuid)}

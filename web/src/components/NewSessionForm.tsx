@@ -7,6 +7,7 @@ import {
   listClaudeSessions,
   removeSession,
 } from '../lib/api';
+import { useShortcut } from '../lib/shortcuts';
 import type { C2Entry, ClaudeSession } from '../types';
 
 interface Props {
@@ -84,20 +85,16 @@ export default function NewSessionForm({ drawer, onCancel, onCreated, showToast 
     };
   }, []);
 
-  // Drawer-mode: focus trap, ESC, restore focus. Inline mode skips these
-  // (the form sits in document flow; clicking outside collapses via the
-  // caller's button toggle, ESC handled at App level via existing drawer
-  // handler).
+  // Drawer-mode: autofocus first input, focus trap on Tab, restore
+  // focus on unmount. The Tab focus-trap stays a local listener — it
+  // isn't a single key shortcut, it cycles focus inside this modal.
+  // ESC is migrated to the shortcut registry (PLAN.md P-3) via the
+  // useShortcut call below.
   useEffect(() => {
     if (!drawer) return;
     previouslyFocused.current = document.activeElement as HTMLElement | null;
     firstInputRef.current?.focus();
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        onCancel();
-        return;
-      }
       if (e.key !== 'Tab' || !rootRef.current) return;
       const focusables = rootRef.current.querySelectorAll<HTMLElement>(
         'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
@@ -119,7 +116,22 @@ export default function NewSessionForm({ drawer, onCancel, onCreated, showToast 
       window.removeEventListener('keydown', onKey);
       previouslyFocused.current?.focus?.();
     };
-  }, [drawer, onCancel]);
+  }, [drawer]);
+
+  // Drawer-mode ESC dismisses the modal. `when` ensures only the
+  // drawer instance fires (inline mode relies on the caller's button
+  // toggle and on the App-level drawer ESC for the parent sidebar).
+  useShortcut(
+    {
+      id: 'newSessionForm.close',
+      keys: 'Escape',
+      scope: 'global',
+      label: 'Close new session form',
+      when: () => drawer,
+      handler: () => onCancel(),
+    },
+    [drawer, onCancel],
+  );
 
   const submitNew = useCallback(async () => {
     setError(null);

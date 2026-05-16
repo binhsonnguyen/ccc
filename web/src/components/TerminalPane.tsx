@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { getOrCreateTerm } from '../lib/terminals';
 import { ptyWsURL } from '../lib/api';
+import { useShortcut } from '../lib/shortcuts';
 import { paneId, tabId } from './TabBar';
 import type { ControlMsg, Tab, TabStatus } from '../types';
 
@@ -203,20 +204,28 @@ export default function TerminalPane({
   const terminalDead = tab.status === 'kicked' || tab.status === 'exited';
   const transportProblem = tab.status === 'disconnected' || tab.status === 'error';
 
-  // ESC + autofocus only for the terminal-dead overlay. The inline banner
-  // does not trap focus by design.
+  // Autofocus the primary action when the terminal-dead overlay shows.
+  // The inline banner does not trap focus by design.
   useEffect(() => {
     if (!visible || !terminalDead) return;
     primaryBtnRef.current?.focus();
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        onClose(tab.claudeUuid);
-      }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [visible, terminalDead, tab.claudeUuid, onClose]);
+  }, [visible, terminalDead]);
+
+  // ESC dismisses the terminal-dead overlay. Migrated to the shortcut
+  // registry (PLAN.md P-3). The `when` predicate keeps each pane's
+  // entry inert unless this pane is the visible one and is actually
+  // showing the overlay — so two open tabs don't both fire.
+  useShortcut(
+    {
+      id: `pane.close.${tab.claudeUuid}`,
+      keys: 'Escape',
+      scope: 'global',
+      label: 'Dismiss terminal-dead overlay',
+      when: () => visible && terminalDead,
+      handler: () => onClose(tab.claudeUuid),
+    },
+    [visible, terminalDead, tab.claudeUuid, onClose],
+  );
 
   return (
     <div

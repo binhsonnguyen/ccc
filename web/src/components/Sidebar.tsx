@@ -7,6 +7,7 @@ import {
   renameSession,
   removeSession,
 } from '../lib/api';
+import { useShortcut } from '../lib/shortcuts';
 import type { C2Entry, Tab } from '../types';
 
 export type SidebarView = 'active' | 'archived';
@@ -225,13 +226,117 @@ export default function Sidebar({
     ],
   );
 
-  // segmented-control keyboard handling
-  const onSegKey = (e: React.KeyboardEvent) => {
-    if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
-      e.preventDefault();
-      onViewChange(view === 'active' ? 'archived' : 'active');
-    }
+  // Segmented Active|Archived arrow nav — migrated to the shortcut
+  // registry (PLAN.md P-3). Scope 'sidebar-focused' + the `when`
+  // predicate keep these entries inert unless the focused element is
+  // inside the segmented tablist itself.
+  const segWhen = () => {
+    const el = document.activeElement;
+    return !!el && !!el.closest('.segmented[role="tablist"]');
   };
+  const toggleView = () =>
+    onViewChange(view === 'active' ? 'archived' : 'active');
+  useShortcut(
+    {
+      id: 'sidebar.segmented.left',
+      keys: 'ArrowLeft',
+      scope: 'sidebar-focused',
+      label: 'Toggle Active / Archived',
+      when: segWhen,
+      handler: toggleView,
+    },
+    [view, onViewChange],
+  );
+  useShortcut(
+    {
+      id: 'sidebar.segmented.right',
+      keys: 'ArrowRight',
+      scope: 'sidebar-focused',
+      label: 'Toggle Active / Archived',
+      when: segWhen,
+      handler: toggleView,
+    },
+    [view, onViewChange],
+  );
+
+  // Row-level keys (r / a / Delete / Backspace). Enter stays local on
+  // the row (it's button-activation semantics for role="button").
+  // The handler reads the focused row's id from data-row-id and looks
+  // up the entry by id — the registry is one set per Sidebar instance,
+  // not per row.
+  const focusedRowEntry = (): C2Entry | null => {
+    const el = document.activeElement;
+    if (!el) return null;
+    const li = el.closest<HTMLElement>('li.session[data-row-id]');
+    const rid = li?.dataset.rowId;
+    if (!rid) return null;
+    return sessions.find((s) => s.id === rid) ?? null;
+  };
+  const rowWhen = () => focusedRowEntry() !== null && !renamingId;
+  useShortcut(
+    {
+      id: 'sidebar.row.rename',
+      keys: 'r',
+      scope: 'sidebar-focused',
+      label: 'Rename focused session',
+      when: rowWhen,
+      handler: () => {
+        const s = focusedRowEntry();
+        if (s) startRename(s);
+      },
+    },
+    [sessions, renamingId, startRename],
+  );
+  useShortcut(
+    {
+      id: 'sidebar.row.archive',
+      keys: 'a',
+      scope: 'sidebar-focused',
+      label: 'Archive / Unarchive focused session',
+      when: rowWhen,
+      handler: () => {
+        const s = focusedRowEntry();
+        if (s) void doArchive(s);
+      },
+    },
+    [sessions, renamingId, doArchive],
+  );
+  // Delete / Backspace open the row menu in danger-armed state — the
+  // user picks Remove and confirms there (avoids a parallel confirm UI).
+  const openRowMenuAtRow = (s: C2Entry) => {
+    const el = rowRefs.current.get(s.id);
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    setMenu({ rowId: s.id, x: rect.right - 200, y: rect.bottom });
+  };
+  useShortcut(
+    {
+      id: 'sidebar.row.delete',
+      keys: 'Delete',
+      scope: 'sidebar-focused',
+      label: 'Open row actions (delete focus)',
+      when: rowWhen,
+      handler: () => {
+        const s = focusedRowEntry();
+        if (s) openRowMenuAtRow(s);
+      },
+    },
+    [sessions, renamingId],
+  );
+  useShortcut(
+    {
+      id: 'sidebar.row.backspace',
+      keys: 'Backspace',
+      scope: 'sidebar-focused',
+      label: 'Open row actions',
+      when: rowWhen,
+      handler: () => {
+        const s = focusedRowEntry();
+        if (s) openRowMenuAtRow(s);
+      },
+    },
+    [sessions, renamingId],
+  );
 
   const onMenuClose = useCallback(() => {
     closeMenuLocal();
@@ -263,7 +368,6 @@ export default function Sidebar({
           className="segmented"
           role="tablist"
           aria-label="Session view"
-          onKeyDown={onSegKey}
         >
           <button
             type="button"
@@ -353,6 +457,10 @@ export default function Sidebar({
             const cwdLabel = s.cwd || '';
             const isRenaming = renamingId === s.id;
 
+            // Enter (button activation) and the ContextMenu key stay
+            // local — they're row semantics, not app-level shortcuts.
+            // r / a / Delete / Backspace live in the shortcut registry
+            // above (scope 'sidebar-focused').
             const onRowKey = (e: React.KeyboardEvent<HTMLLIElement>) => {
               if (isRenaming) return;
               if (e.key === 'Enter') {
@@ -362,19 +470,6 @@ export default function Sidebar({
                 // for the banner/disableStdin handling.
                 onOpen(s);
                 onSessionSelected?.();
-              } else if (e.key === 'r') {
-                e.preventDefault();
-                startRename(s);
-              } else if (e.key === 'a') {
-                e.preventDefault();
-                void doArchive(s);
-              } else if (e.key === 'Delete' || e.key === 'Backspace') {
-                e.preventDefault();
-                // open menu in danger-armed state via the controller:
-                // simplest path is just to open the menu — user picks
-                // Remove and confirms. Avoids a second confirm UI.
-                const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                setMenu({ rowId: s.id, x: rect.right - 200, y: rect.bottom });
               } else if (e.key === 'ContextMenu') {
                 e.preventDefault();
                 const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
@@ -388,6 +483,7 @@ export default function Sidebar({
                 ref={(el) => {
                   rowRefs.current.set(s.id, el);
                 }}
+                data-row-id={s.id}
                 className={className}
                 onClick={() => {
                   if (isRenaming) return;
