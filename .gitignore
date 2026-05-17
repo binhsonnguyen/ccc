@@ -18,5 +18,6 @@ web/dist
 .review/
 .review-*
 review-*.png
+.tmp-*
 # Note: internal/webdev/assets/ IS committed — it is the source-of-truth
 # for `go:embed` so a clean clone can `go build` without Node installed.

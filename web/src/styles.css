@@ -238,6 +238,18 @@ code {
   background: var(--row-tint, var(--accent));
   color: #0c0c0c;
 }
+/* C-1: per-row activity sparkline. Fixed 24×8 box (6px draw + 2px
+ * vertical padding) so the canvas slot doesn't reflow on data change.
+ * Static visual — no motion, so prefers-reduced-motion needs no
+ * special handling. */
+.session-sparkline {
+  flex: 0 0 24px;
+  width: 24px;
+  height: 8px;
+  margin-right: 4px;
+  display: inline-block;
+  vertical-align: middle;
+}
 .session-uuid {
   color: var(--text-faint);
   font-size: var(--text-2xs);

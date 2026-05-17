@@ -2,9 +2,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import SessionRowMenu, { type MenuItem } from './SessionRowMenu';
 import NewSessionForm from './NewSessionForm';
 import SessionPreview from './SessionPreview';
+import Sparkline from './Sparkline';
 import {
   ApiError,
   archiveSession,
+  fetchActivity,
   fetchSessionTail,
   renameSession,
   removeSession,
@@ -87,6 +89,48 @@ function setCachedTail(id: string, text: string) {
 
 const HOVER_DELAY_MS = 600;
 const DISMISS_DELAY_MS = 200;
+
+// C-1: per-row activity cache. Same idea as the tail cache but with a
+// shorter TTL (1.5 s) — the sparkline polls every 2 s so a single
+// in-flight result should not be re-fetched by a sibling re-render
+// in the meantime. Polling itself is gated by document visibility +
+// a 30-row cap so a giant sidebar doesn't hammer the server.
+interface ActivityCacheEntry {
+  buckets: number[] | null;
+  at: number;
+}
+const ACTIVITY_POLL_MS = 2000;
+// TTL slightly under the poll period so a tick that runs a hair late
+// still hits the cache, but every poll *does* re-fetch (otherwise
+// what's the point of polling). Used by sibling renders within the
+// same window too.
+const ACTIVITY_TTL_MS = ACTIVITY_POLL_MS - 100;
+const ACTIVITY_MAX_ROWS = 30;
+const activityCache = new Map<string, ActivityCacheEntry>();
+function getCachedActivity(id: string): number[] | null | undefined {
+  const hit = activityCache.get(id);
+  if (!hit) return undefined;
+  if (Date.now() - hit.at > ACTIVITY_TTL_MS) return undefined;
+  return hit.buckets;
+}
+function setCachedActivity(id: string, buckets: number[] | null) {
+  activityCache.set(id, { buckets, at: Date.now() });
+}
+
+// Cheap structural compare for two bucket arrays (or nulls). Returns
+// true when the sparkline would render identically — used to skip
+// React state updates that would otherwise rerender 30 rows on every
+// poll even when nothing changed.
+function buckets_eq(
+  a: number[] | null | undefined,
+  b: number[] | null | undefined,
+): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
 
 export default function Sidebar({
   sessions,
@@ -275,6 +319,62 @@ export default function Sidebar({
     },
     [],
   );
+
+  // C-1: activity polling for the sparkline. We keep a per-row map of
+  // buckets in state so canvases re-render only when their data
+  // changes. The poll loop runs every 2 s, skips when the tab is
+  // hidden, and only requests at most ACTIVITY_MAX_ROWS live rows so a
+  // very long sidebar doesn't generate dozens of round-trips. Pending
+  // and non-live entries are skipped entirely — server would 204 anyway.
+  const [activity, setActivity] = useState<Map<string, number[] | null>>(
+    () => new Map(),
+  );
+  useEffect(() => {
+    if (!sessions || sessions.length === 0) return;
+    let cancelled = false;
+    const tick = async () => {
+      if (document.hidden) return;
+      const live = sessions
+        .filter((s) => s.live && !!s.claudeUuid)
+        .slice(0, ACTIVITY_MAX_ROWS);
+      if (live.length === 0) return;
+      const results = await Promise.all(
+        live.map(async (s) => {
+          const cached = getCachedActivity(s.id);
+          if (cached !== undefined) return [s.id, cached] as const;
+          try {
+            const b = await fetchActivity(s.id);
+            setCachedActivity(s.id, b);
+            return [s.id, b] as const;
+          } catch {
+            return [s.id, null] as const;
+          }
+        }),
+      );
+      if (cancelled) return;
+      setActivity((prev) => {
+        // Only allocate a new Map if at least one entry actually
+        // changed — reduces React rerender churn when the server
+        // returns the same buckets two polls in a row.
+        let changed = false;
+        const next = new Map(prev);
+        for (const [id, b] of results) {
+          const cur = prev.get(id);
+          if (!buckets_eq(cur, b)) {
+            next.set(id, b);
+            changed = true;
+          }
+        }
+        return changed ? next : prev;
+      });
+    };
+    void tick();
+    const interval = window.setInterval(() => void tick(), ACTIVITY_POLL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [sessions]);
 
   const closeMenuLocal = useCallback(() => {
     const rowId = menu?.rowId;
@@ -854,6 +954,16 @@ export default function Sidebar({
                   >
                     {monogram}
                   </span>
+                  {!pending && s.live && (
+                    <Sparkline
+                      buckets={activity.get(s.id) ?? null}
+                      // On the active row the background is also the
+                      // tint, so painting bars in the same hue makes
+                      // them disappear. Use the lighter "fg" variant
+                      // there for contrast.
+                      color={isActive ? rowTintFg : rowTint}
+                    />
+                  )}
                   {isRenaming ? (
                     <input
                       type="text"

@@ -113,6 +113,19 @@ export async function fetchSessionTail(c2Id: string, bytes = 2048): Promise<stri
   return await r.text();
 }
 
+// fetchActivity returns the 60-bucket bytes/sec ring (oldest first) for a
+// live session, or null when no live PTY exists (server 204). The sidebar
+// polls this every ~2s for visible live rows to draw the sparkline.
+export async function fetchActivity(c2Id: string): Promise<number[] | null> {
+  const r = await fetch(
+    `/api/sessions/${encodeURIComponent(c2Id)}/activity`,
+  );
+  if (r.status === 204) return null;
+  if (!r.ok) throw await readError(r);
+  const j = (await r.json()) as { buckets?: number[] };
+  return j?.buckets ?? null;
+}
+
 export function ptyWsURL(c2Id: string): string {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${proto}//${location.host}/api/sessions/${encodeURIComponent(c2Id)}/pty`;

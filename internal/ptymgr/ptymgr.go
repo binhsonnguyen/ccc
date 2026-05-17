@@ -83,7 +83,8 @@ type Session struct {
 
 	mu       sync.Mutex
 	ring     *ringBuffer
-	client   Client // currently attached client, or nil
+	activity activityRing // 60-bucket × 1s ring of bytes/sec (C-1)
+	client   Client       // currently attached client, or nil
 	exited   bool
 	exitCode int
 
@@ -515,6 +516,7 @@ func (m *Manager) readLoop(s *Session) {
 			chunk := append([]byte(nil), buf[:n]...)
 			s.mu.Lock()
 			s.ring.write(chunk)
+			s.activity.record(time.Now(), n)
 			c := s.client
 			s.mu.Unlock()
 			if c != nil {
@@ -699,6 +701,119 @@ func (r *ringBuffer) write(p []byte) {
 		}
 		p = p[n:]
 	}
+}
+
+// activityRing is a 60-bucket × 1-second rolling counter of PTY-stdout
+// bytes used to draw the sidebar sparkline (PLAN.md C-1). All access is
+// expected to happen under the owning Session's mu — the ring keeps no
+// internal lock to avoid double-locking on the hot reader path.
+//
+// Buckets are indexed by absolute second (Unix time % 60). On every
+// record() the ring zeros out any buckets whose owning second is older
+// than the most-recent observed second — a cheap form of TTL that
+// avoids a background ticker. snapshot() does the same alignment so
+// stale data never appears in the output.
+type activityRing struct {
+	buckets [60]uint32
+	head    int       // index of the most-recent bucket
+	headT   time.Time // unix-second start of the most-recent bucket
+}
+
+// secFloor returns t truncated to the start of its second.
+func secFloor(t time.Time) time.Time {
+	return time.Unix(t.Unix(), 0)
+}
+
+// record accumulates n bytes into the bucket for `now`, rotating the
+// ring forward if `now` falls into a later second than headT. Buckets
+// for skipped seconds are zeroed (no activity).
+func (a *activityRing) record(now time.Time, n int) {
+	if n <= 0 {
+		return
+	}
+	nowS := secFloor(now)
+	if a.headT.IsZero() {
+		a.headT = nowS
+		a.head = 0
+		a.buckets[0] = uint32(n)
+		return
+	}
+	diff := int(nowS.Sub(a.headT) / time.Second)
+	if diff < 0 {
+		// Clock jumped backwards. Treat as same second — better than
+		// rewriting history. Don't move head.
+		a.buckets[a.head] += uint32(n)
+		return
+	}
+	if diff == 0 {
+		a.buckets[a.head] += uint32(n)
+		return
+	}
+	if diff >= 60 {
+		// Gap exceeded the window — wipe everything.
+		for i := range a.buckets {
+			a.buckets[i] = 0
+		}
+		a.head = 0
+		a.headT = nowS
+		a.buckets[0] = uint32(n)
+		return
+	}
+	// Advance head `diff` times, zeroing intermediate buckets.
+	for i := 0; i < diff; i++ {
+		a.head = (a.head + 1) % 60
+		a.buckets[a.head] = 0
+	}
+	a.headT = nowS
+	a.buckets[a.head] = uint32(n)
+}
+
+// snapshot returns the 60 buckets aligned so index 59 == most-recent
+// second (relative to `now`). Buckets older than 60s are returned as
+// zero. Caller receives a value copy — safe to inspect outside the
+// lock.
+func (a *activityRing) snapshot(now time.Time) [60]uint32 {
+	var out [60]uint32
+	if a.headT.IsZero() {
+		return out
+	}
+	nowS := secFloor(now)
+	skew := int(nowS.Sub(a.headT) / time.Second)
+	if skew < 0 {
+		skew = 0
+	}
+	if skew >= 60 {
+		return out
+	}
+	// Walk the ring from oldest → newest. The bucket at logical
+	// position p (0..59) in the head-relative view corresponds to
+	// physical index (a.head - (59 - p) + 60) % 60 and is `59 - p`
+	// seconds older than headT. After we apply `skew` to account for
+	// `now` being newer than `headT`, the same bucket is
+	// (59 - p) + skew seconds older than `now`.
+	for p := 0; p < 60; p++ {
+		// ageFromNow: how many seconds older than `now` this slot is.
+		ageFromNow := 59 - p
+		// ageFromHead: same, but relative to headT (the most-recent
+		// recorded second). Negative means "newer than head" → no data.
+		ageFromHead := ageFromNow - skew
+		if ageFromHead < 0 || ageFromHead >= 60 {
+			out[p] = 0
+			continue
+		}
+		idx := (a.head - ageFromHead + 60*2) % 60
+		out[p] = a.buckets[idx]
+	}
+	return out
+}
+
+// Activity returns a lock-safe snapshot of the bytes/sec ring aligned
+// so index 59 is the most-recent second. Lengths zero out beyond the
+// 60-second window. Use for the sidebar sparkline.
+func (s *Session) Activity() [60]uint32 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.activity.snapshot(time.Now())
 }
 
 func (r *ringBuffer) snapshot() []byte {

@@ -305,6 +305,8 @@ func routeSession(originHost, originHostAlt string) http.HandlerFunc {
 			handleSessionPTY(w, r, id, originHost, originHostAlt)
 		case "tail":
 			handleSessionTail(w, r, id)
+		case "activity":
+			handleSessionActivity(w, r, id)
 		default:
 			http.NotFound(w, r)
 		}
@@ -446,6 +448,46 @@ func handleSessionTail(w http.ResponseWriter, r *http.Request, id string) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(tail)
+}
+
+// handleSessionActivity returns the 60-bucket bytes/sec ring for a live
+// session as JSON: {"buckets":[…60 ints, oldest first]}. Returns 204
+// when no live PTY exists (mirrors the tail endpoint). GET only, no
+// CSRF surface; Cache-Control: no-store so the sidebar's 2s polling
+// always sees fresh data.
+func handleSessionActivity(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	// Polling-style endpoint — never cache, regardless of the response
+	// shape. Set the header up front so the 204 path inherits it.
+	w.Header().Set("Cache-Control", "no-store")
+	f, err := store.Load()
+	if err != nil {
+		httpError(w, err, http.StatusInternalServerError)
+		return
+	}
+	e := f.Find(id)
+	if e == nil {
+		http.NotFound(w, r)
+		return
+	}
+	var sess *ptymgr.Session
+	if e.ClaudeUUID != "" {
+		sess = manager.GetSessionByUUID(e.ClaudeUUID)
+	}
+	if sess == nil {
+		sess = manager.GetSession(e.ID)
+	}
+	if sess == nil {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	snap := sess.Activity()
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{"buckets": snap[:]})
 }
 
 // handleClaudeSessions returns the bind dialog's data set: unbound claude

@@ -24,6 +24,14 @@ Concrete consequences of "thin":
   browser xterm.js + WS PTY bridge is a well-trodden path with none of
   those blockers.
 
+## Allowed server state
+
+cc-server may keep transient, in-memory state *derived* from the PTY stream
+(scrollback ring buffer, bytes/sec activity counter). These never persist to
+disk, never become a source of truth, and disappear with the server. They are
+read-only views that help the GUI; tearing the server down loses them and
+that's fine — the data still lives in Claude's JSONL.
+
 ## UX model
 
 Inspired by https://www.thecompanion.sh/ — sidebar of sessions, tab bar of

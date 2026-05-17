@@ -611,3 +611,136 @@ func TestAttach_ResumedNoPendingFrame(t *testing.T) {
 		t.Errorf("resumed session sent stray pending frame; controls=%v", c.controls)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Activity ring (C-1)
+// ---------------------------------------------------------------------------
+
+// Recording bytes into the same second accumulates into the head bucket;
+// the snapshot must surface that count at index 59 (most-recent).
+func TestActivityRing_RecordSameSecond(t *testing.T) {
+	var a activityRing
+	now := time.Unix(1_000_000, 0)
+	a.record(now, 100)
+	a.record(now.Add(200*time.Millisecond), 50)
+	snap := a.snapshot(now)
+	if snap[59] != 150 {
+		t.Fatalf("head bucket = %d, want 150", snap[59])
+	}
+	for i := 0; i < 59; i++ {
+		if snap[i] != 0 {
+			t.Fatalf("bucket[%d] = %d, want 0", i, snap[i])
+		}
+	}
+}
+
+// Rotating across seconds must place each second's bytes in a distinct
+// bucket — and the most-recent must end up at index 59 regardless of
+// how many seconds passed.
+func TestActivityRing_RotateAcrossSeconds(t *testing.T) {
+	var a activityRing
+	start := time.Unix(2_000_000, 0)
+	a.record(start, 10)
+	a.record(start.Add(1*time.Second), 20)
+	a.record(start.Add(2*time.Second), 30)
+	now := start.Add(2 * time.Second)
+	snap := a.snapshot(now)
+	if snap[59] != 30 {
+		t.Fatalf("snap[59]=%d want 30", snap[59])
+	}
+	if snap[58] != 20 {
+		t.Fatalf("snap[58]=%d want 20", snap[58])
+	}
+	if snap[57] != 10 {
+		t.Fatalf("snap[57]=%d want 10", snap[57])
+	}
+}
+
+// Snapshotting `skew` seconds after the last record() should shift the
+// most-recent data back by `skew` and zero-fill the newer slots.
+func TestActivityRing_SnapshotSkewZeroFills(t *testing.T) {
+	var a activityRing
+	t0 := time.Unix(3_000_000, 0)
+	a.record(t0, 42)
+	snap := a.snapshot(t0.Add(5 * time.Second))
+	// 5 seconds passed → bucket 42 should sit at index 54 (59-5).
+	if snap[54] != 42 {
+		t.Fatalf("snap[54]=%d want 42", snap[54])
+	}
+	for i := 55; i < 60; i++ {
+		if snap[i] != 0 {
+			t.Fatalf("snap[%d]=%d want 0 (after skew)", i, snap[i])
+		}
+	}
+}
+
+// Data older than the 60-second window must drop off entirely.
+func TestActivityRing_AgesOut(t *testing.T) {
+	var a activityRing
+	t0 := time.Unix(4_000_000, 0)
+	a.record(t0, 99)
+	snap := a.snapshot(t0.Add(120 * time.Second))
+	for i, v := range snap {
+		if v != 0 {
+			t.Fatalf("snap[%d]=%d want 0 (aged out)", i, v)
+		}
+	}
+}
+
+// A gap larger than the window between two records must wipe stale
+// data — the new record starts a fresh window.
+func TestActivityRing_GapWipes(t *testing.T) {
+	var a activityRing
+	t0 := time.Unix(5_000_000, 0)
+	a.record(t0, 7)
+	a.record(t0.Add(120*time.Second), 11)
+	snap := a.snapshot(t0.Add(120 * time.Second))
+	if snap[59] != 11 {
+		t.Fatalf("snap[59]=%d want 11", snap[59])
+	}
+	for i := 0; i < 59; i++ {
+		if snap[i] != 0 {
+			t.Fatalf("snap[%d]=%d want 0 after gap wipe", i, snap[i])
+		}
+	}
+}
+
+// Session.Activity must be safe to call concurrently with a writer that
+// holds s.mu via record. Drives the snapshot reader and a write loop in
+// parallel and lets `go test -race` catch any UB.
+func TestSession_ActivityRace(t *testing.T) {
+	s := &Session{
+		ring: newRing(1024),
+	}
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		now := time.Now()
+		for i := 0; ; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			s.mu.Lock()
+			s.activity.record(now.Add(time.Duration(i)*time.Millisecond), 8)
+			s.mu.Unlock()
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 5000; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			_ = s.Activity()
+		}
+	}()
+	time.Sleep(50 * time.Millisecond)
+	close(stop)
+	wg.Wait()
+}
