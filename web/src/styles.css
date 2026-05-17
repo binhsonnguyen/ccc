@@ -172,8 +172,17 @@ code {
   user-select: none;
   transition: background-color 80ms ease-out;
 }
-.session:hover { background: rgba(255,255,255,0.04); }
-.session.active { background: rgba(59,130,246,0.12); border-left-color: var(--accent); }
+.session:hover {
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--row-tint, var(--accent)) 8%, transparent) 0%, transparent 40%),
+    rgba(255,255,255,0.04);
+}
+/* C-3: active row uses the cwd-derived hue rather than the fixed brand
+   accent so two sessions on different projects look distinct at a glance. */
+.session.active {
+  background: color-mix(in srgb, var(--row-tint, var(--accent)) 14%, transparent);
+  border-left-color: var(--row-tint, var(--accent));
+}
 .session.disabled { cursor: not-allowed; opacity: 0.55; }
 .session.disabled:hover { background: transparent; }
 .session.open .session-name { color: #fff; }
@@ -196,6 +205,38 @@ code {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+/* C-3: cwd monogram chip. Visible always (not just on active) so the row
+   carries a stable, colorblind-safe glyph in addition to the hue tint.
+   Active state inverts: the chip flips to the hue background, giving the
+   selected row a strong, identifiable badge. */
+.session-monogram {
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  margin-right: 6px;
+  border-radius: 3px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  background: color-mix(in srgb, var(--row-tint, var(--accent)) 18%, transparent);
+  /* Use the lighter "fg" variant so the glyph stays readable on
+   * blue/purple hues — the plain tint at 62% lightness drops to
+   * ~3:1 contrast against the near-dark resting bg there. */
+  color: var(--row-tint-fg, var(--accent));
+  font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+  text-transform: uppercase;
+  user-select: none;
+}
+/* Active: the chip flips to the tint as background. White-on-tint at
+ * 62 % lightness fails WCAG for yellow/green/cyan hues; use near-black
+ * instead — it stays ≥ 6:1 across the whole wheel. */
+.session.active .session-monogram {
+  background: var(--row-tint, var(--accent));
+  color: #0c0c0c;
 }
 .session-uuid {
   color: var(--text-faint);
@@ -259,7 +300,8 @@ code {
 .tab:hover { background: rgba(255,255,255,0.05); }
 .tab.active {
   background: var(--tab-active-bg);
-  border-top: 2px solid var(--accent);
+  /* C-3: hue derives from the tab's cwd; matches the sidebar row strip. */
+  border-top: 2px solid var(--tab-tint, var(--accent));
   padding-top: 2px;
 }
 .tab-name {

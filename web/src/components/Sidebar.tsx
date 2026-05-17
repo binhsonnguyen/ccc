@@ -8,6 +8,7 @@ import {
   removeSession,
 } from '../lib/api';
 import { useShortcut } from '../lib/shortcuts';
+import { cwdMonogram, cwdTint, cwdTintFg } from '../lib/cwdTint';
 import type { C2Entry, Tab } from '../types';
 
 export type SidebarView = 'active' | 'archived';
@@ -662,6 +663,17 @@ export default function Sidebar({
               (isOpen && !isActive ? ' open' : '');
             const cwdLabel = s.cwd || '';
             const isRenaming = renamingId === s.id;
+            // C-3: hue derives from cwd so multiple sessions on the same
+            // project share an accent, but different projects pop apart.
+            // Inline as a CSS custom property — CSS owns the actual usage
+            // (border-left strip, hover glow, monogram chip).
+            const rowTint = cwdTint(s.cwd || '');
+            const rowTintFg = cwdTintFg(s.cwd || '');
+            const monogram = cwdMonogram(s.cwd || '');
+            const rowStyle = {
+              '--row-tint': rowTint,
+              '--row-tint-fg': rowTintFg,
+            } as React.CSSProperties;
 
             // Enter (button activation) and the ContextMenu key stay
             // local — they're row semantics, not app-level shortcuts.
@@ -691,6 +703,7 @@ export default function Sidebar({
                 }}
                 data-row-id={s.id}
                 className={className}
+                style={rowStyle}
                 onClick={() => {
                   if (isRenaming) return;
                   onOpen(s);
@@ -712,6 +725,13 @@ export default function Sidebar({
                 title={cwdLabel}
               >
                 <div className="session-name">
+                  <span
+                    className="session-monogram"
+                    aria-hidden="true"
+                    title={cwdLabel || undefined}
+                  >
+                    {monogram}
+                  </span>
                   {isRenaming ? (
                     <input
                       type="text"

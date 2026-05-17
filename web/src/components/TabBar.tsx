@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useShortcut } from '../lib/shortcuts';
+import { cwdTint } from '../lib/cwdTint';
 import type { Tab } from '../types';
 
 interface Props {
@@ -298,6 +299,9 @@ export default function TabBar({ tabs, activeUuid, onSelect, onClose, onKill, on
         const isDragging = draggingUuid === t.claudeUuid;
         const isOver = overState?.uuid === t.claudeUuid;
         const overSide = isOver ? overState!.side : null;
+        // C-3: same hue as the sidebar row for this cwd. Active tab's
+        // top-border picks this up via var(--tab-tint) (see styles.css).
+        const tabStyle = { ['--tab-tint' as string]: cwdTint(t.cwd || '') } as React.CSSProperties;
         return (
           <div
             key={t.claudeUuid}
@@ -313,6 +317,7 @@ export default function TabBar({ tabs, activeUuid, onSelect, onClose, onKill, on
               (overSide === 'left' ? ' drag-over-left' : '') +
               (overSide === 'right' ? ' drag-over-right' : '')
             }
+            style={tabStyle}
             onClick={() => onSelect(t.claudeUuid)}
             onKeyDown={(e) => onTabKeyDown(e, t.claudeUuid)}
             draggable
