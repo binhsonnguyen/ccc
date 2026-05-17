@@ -253,6 +253,65 @@ func (m *Manager) HasKey(key string) bool {
 	return ok
 }
 
+// GetSession returns the live Session keyed by `key` (claude uuid OR
+// c2 id for pending sessions), or nil if absent. Read-only accessor —
+// callers must not mutate the session, only call its public methods.
+func (m *Manager) GetSession(key string) *Session {
+	if key == "" {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.sessions[key]
+}
+
+// GetSessionByUUID returns the live Session whose UUID or Key matches
+// the given claude uuid, or nil if absent. Mirrors HasUUID's matching
+// rules so callers that only know the claude uuid (not the manager
+// key) can still find the session.
+func (m *Manager) GetSessionByUUID(uuid string) *Session {
+	if uuid == "" {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, s := range m.sessions {
+		if s.Key == uuid || s.UUID == uuid {
+			return s
+		}
+	}
+	return nil
+}
+
+// TailBytes returns up to `n` of the most recent bytes from this
+// session's scrollback ring buffer. `n` is clamped to [256, 32768];
+// passing 0 or negative yields the default 8192. Returns nil if the
+// ring is empty. Lock-safe: copies under s.mu so the reader goroutine
+// can't mutate mid-read.
+func (s *Session) TailBytes(n int) []byte {
+	const (
+		minN = 256
+		maxN = 32 * 1024
+		defN = 8 * 1024
+	)
+	if n <= 0 {
+		n = defN
+	}
+	if n < minN {
+		n = minN
+	}
+	if n > maxN {
+		n = maxN
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	snap := s.ring.snapshot()
+	if len(snap) <= n {
+		return snap
+	}
+	return snap[len(snap)-n:]
+}
+
 // KillKey SIGKILLs the session at `key`. Best-effort; no-op if absent.
 func (m *Manager) KillKey(key string) {
 	if key == "" {

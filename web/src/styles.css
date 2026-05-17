@@ -1537,3 +1537,74 @@ code {
   font-size: var(--text-xs);
   padding: 0 2px;
 }
+
+/* C-2 last-frame hover preview. Fixed-positioned tooltip anchored to a
+   sidebar row; rendered after a 600 ms dwell, dismissed on cursor exit
+   from both row + preview. Mouse-only — hidden from screen readers. */
+.session-preview {
+  position: fixed;
+  /* 45: above the drawer scrim (40) but below modal overlays
+   * (palette/cheatsheet/new-session live at 60–80). */
+  z-index: 45;
+  width: 360px;
+  max-height: calc(11px * 1.5 * 9 + 32px);
+  overflow: hidden;
+  background: #1a1a1d;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  pointer-events: auto;
+  animation: previewIn 120ms ease-out;
+}
+@keyframes previewIn {
+  from { opacity: 0; transform: translateY(-2px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.session-preview-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.3;
+}
+.session-preview-name {
+  color: var(--text);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-preview-cwd {
+  color: var(--text-faint);
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 1;
+  min-width: 0;
+}
+.session-preview-body {
+  padding: 6px 10px;
+}
+.session-preview-body pre {
+  margin: 0;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.session-preview-empty {
+  color: var(--text-faint);
+  text-align: center;
+  padding: 4px 0;
+  font-style: italic;
+}

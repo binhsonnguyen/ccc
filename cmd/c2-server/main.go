@@ -303,6 +303,8 @@ func routeSession(originHost, originHostAlt string) http.HandlerFunc {
 			handleSessionBind(w, r, id)
 		case "pty":
 			handleSessionPTY(w, r, id, originHost, originHostAlt)
+		case "tail":
+			handleSessionTail(w, r, id)
 		default:
 			http.NotFound(w, r)
 		}
@@ -391,6 +393,59 @@ func handleSessionBind(w http.ResponseWriter, r *http.Request, id string) {
 		return
 	}
 	writeJSON(w, entry)
+}
+
+// handleSessionTail returns the tail of a session's PTY scrollback
+// ring buffer as raw text/plain bytes (ANSI escapes preserved — the
+// client strips them for preview rendering). Returns 204 when there
+// is no live PTY (so no buffer). GET only, no CSRF surface.
+//
+// Query: ?bytes=N (default 8192, clamped 256..32768).
+func handleSessionTail(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	f, err := store.Load()
+	if err != nil {
+		httpError(w, err, http.StatusInternalServerError)
+		return
+	}
+	e := f.Find(id)
+	if e == nil {
+		http.NotFound(w, r)
+		return
+	}
+	// Look up the live PTY. Pending entries (no claudeUuid) are keyed
+	// by c2 id; bound entries by claude uuid. Try uuid first, fall
+	// back to c2 id for the pending case.
+	var sess *ptymgr.Session
+	if e.ClaudeUUID != "" {
+		sess = manager.GetSessionByUUID(e.ClaudeUUID)
+	}
+	if sess == nil {
+		sess = manager.GetSession(e.ID)
+	}
+	if sess == nil {
+		// No live PTY → no scrollback to return.
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	n := 0
+	if q := r.URL.Query().Get("bytes"); q != "" {
+		if v, err := strconv.Atoi(q); err == nil {
+			n = v
+		}
+	}
+	tail := sess.TailBytes(n) // method clamps
+	if len(tail) == 0 {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(tail)
 }
 
 // handleClaudeSessions returns the bind dialog's data set: unbound claude

@@ -79,6 +79,82 @@ func TestRingBuffer_WrapAroundManyWrites(t *testing.T) {
 	}
 }
 
+// TailBytes clamps n into [256, 32768] (with 0 → default 8192) and
+// returns a copy of the last n bytes of the ring. Empty ring → nil.
+func TestSession_TailBytes_ClampAndTail(t *testing.T) {
+	s := &Session{ring: newRing(2048)}
+
+	// Empty buffer.
+	if got := s.TailBytes(1024); got != nil {
+		t.Fatalf("empty TailBytes = %q, want nil", got)
+	}
+
+	// Fill with a known pattern. Last byte should always be the most
+	// recent one written.
+	payload := bytes.Repeat([]byte("abcdefghij"), 200) // 2000 bytes
+	s.ring.write(payload)
+
+	// Default (n=0) clamps to 8192 but ring only holds 2000 bytes.
+	if got := s.TailBytes(0); !bytes.Equal(got, payload) {
+		t.Fatalf("default TailBytes len = %d, want %d", len(got), len(payload))
+	}
+
+	// Below floor: 100 clamps up to 256.
+	got := s.TailBytes(100)
+	if len(got) != 256 {
+		t.Fatalf("n=100 → len=%d, want 256", len(got))
+	}
+	if !bytes.Equal(got, payload[len(payload)-256:]) {
+		t.Fatalf("n=100 tail mismatch")
+	}
+
+	// Above ceiling: 99999 clamps down to 32768 but ring smaller.
+	got = s.TailBytes(99999)
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("n=99999 should return whole ring")
+	}
+
+	// Exact in-range request.
+	got = s.TailBytes(500)
+	if len(got) != 500 {
+		t.Fatalf("n=500 → len=%d", len(got))
+	}
+	if !bytes.Equal(got, payload[len(payload)-500:]) {
+		t.Fatalf("n=500 tail mismatch")
+	}
+}
+
+// TailBytes must coordinate with the reader goroutine via s.mu: a
+// concurrent ring.write() during a TailBytes call must not race the
+// snapshot. We hammer both sides with -race to surface any missing
+// lock acquisition.
+func TestSession_TailBytes_RaceWithWriter(t *testing.T) {
+	s := &Session{ring: newRing(4096)}
+	chunk := bytes.Repeat([]byte("x"), 128)
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				s.mu.Lock()
+				s.ring.write(chunk)
+				s.mu.Unlock()
+			}
+		}
+	}()
+	deadline := time.Now().Add(50 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		_ = s.TailBytes(512)
+	}
+	close(stop)
+	wg.Wait()
+}
+
 // ---------------------------------------------------------------------------
 // Fake PTY plumbing
 //

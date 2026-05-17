@@ -101,6 +101,18 @@ export async function listClaudeSessions(): Promise<ClaudeSessionsResponse> {
   };
 }
 
+// fetchSessionTail returns up to `bytes` raw bytes (ANSI escapes
+// preserved) from the live PTY scrollback. Empty string when no live
+// PTY (server returns 204) so callers can render a placeholder.
+export async function fetchSessionTail(c2Id: string, bytes = 2048): Promise<string> {
+  const r = await fetch(
+    `/api/sessions/${encodeURIComponent(c2Id)}/tail?bytes=${bytes}`,
+  );
+  if (r.status === 204) return '';
+  if (!r.ok) throw await readError(r);
+  return await r.text();
+}
+
 export function ptyWsURL(c2Id: string): string {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${proto}//${location.host}/api/sessions/${encodeURIComponent(c2Id)}/pty`;

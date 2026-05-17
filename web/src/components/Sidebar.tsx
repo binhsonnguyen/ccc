@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import SessionRowMenu, { type MenuItem } from './SessionRowMenu';
 import NewSessionForm from './NewSessionForm';
+import SessionPreview from './SessionPreview';
 import {
   ApiError,
   archiveSession,
+  fetchSessionTail,
   renameSession,
   removeSession,
 } from '../lib/api';
@@ -58,6 +60,33 @@ interface MenuState {
   x: number;
   y: number;
 }
+
+interface PreviewState {
+  rowId: string;
+  rect: DOMRect;
+  text: string | null; // null = loading
+}
+
+// Module-level cache so hover → leave → hover doesn't re-fetch within
+// 5 s. Keyed by c2 id; value is the raw text body the server returned
+// (still containing ANSI — stripping happens in the component).
+const TAIL_TTL_MS = 5000;
+const tailCache = new Map<string, { text: string; at: number }>();
+function getCachedTail(id: string): string | null {
+  const hit = tailCache.get(id);
+  if (!hit) return null;
+  if (Date.now() - hit.at > TAIL_TTL_MS) {
+    tailCache.delete(id);
+    return null;
+  }
+  return hit.text;
+}
+function setCachedTail(id: string, text: string) {
+  tailCache.set(id, { text, at: Date.now() });
+}
+
+const HOVER_DELAY_MS = 600;
+const DISMISS_DELAY_MS = 200;
 
 export default function Sidebar({
   sessions,
@@ -157,6 +186,95 @@ export default function Sidebar({
     if (openNewSessionTick !== undefined) setCreating(true);
   }, [openNewSessionTick]);
   const rowRefs = useRef<Map<string, HTMLLIElement | null>>(new Map());
+
+  // C-2 hover preview state. Two timers: hoverTimer fires the fetch
+  // after 600 ms of dwell; dismissTimer gives the user a 200 ms grace
+  // to slide the cursor from row → preview without flicker. We store
+  // both as refs since they don't drive render.
+  const [preview, setPreview] = useState<PreviewState | null>(null);
+  const hoverTimer = useRef<number | null>(null);
+  const dismissTimer = useRef<number | null>(null);
+  // Generation counter so a fetch that started for row A but resolved
+  // after the user moved to row B doesn't overwrite B's preview.
+  const previewGen = useRef(0);
+
+  const clearHoverTimer = () => {
+    if (hoverTimer.current !== null) {
+      window.clearTimeout(hoverTimer.current);
+      hoverTimer.current = null;
+    }
+  };
+  const clearDismissTimer = () => {
+    if (dismissTimer.current !== null) {
+      window.clearTimeout(dismissTimer.current);
+      dismissTimer.current = null;
+    }
+  };
+  const closePreview = useCallback(() => {
+    clearHoverTimer();
+    clearDismissTimer();
+    previewGen.current++;
+    setPreview(null);
+  }, []);
+
+  // Show preview for a session row. Disabled for pending/non-live
+  // entries — the server would 204 anyway, but skipping the fetch
+  // keeps round-trips off the network.
+  const openPreviewFor = useCallback((s: C2Entry, el: HTMLElement) => {
+    if (!s.claudeUuid || !s.live) return;
+    const rect = el.getBoundingClientRect();
+    const cached = getCachedTail(s.id);
+    const gen = ++previewGen.current;
+    setPreview({ rowId: s.id, rect, text: cached });
+    if (cached !== null) return;
+    fetchSessionTail(s.id, 2048)
+      .then((text) => {
+        setCachedTail(s.id, text);
+        // Stale fetch: user moved to another row already.
+        if (previewGen.current !== gen) return;
+        setPreview((p) => (p && p.rowId === s.id ? { ...p, text } : p));
+      })
+      .catch(() => {
+        if (previewGen.current !== gen) return;
+        // Render as empty rather than surfacing an error toast for a
+        // decorative tooltip.
+        setPreview((p) => (p && p.rowId === s.id ? { ...p, text: '' } : p));
+      });
+  }, []);
+
+  const onRowMouseEnter = useCallback(
+    (s: C2Entry, el: HTMLElement) => {
+      // Disable preview during rename / for pending rows.
+      if (renamingId === s.id || !s.claudeUuid || !s.live) return;
+      clearDismissTimer();
+      clearHoverTimer();
+      hoverTimer.current = window.setTimeout(() => {
+        hoverTimer.current = null;
+        openPreviewFor(s, el);
+      }, HOVER_DELAY_MS);
+    },
+    [openPreviewFor, renamingId],
+  );
+  const onRowMouseLeave = useCallback(() => {
+    clearHoverTimer();
+    clearDismissTimer();
+    dismissTimer.current = window.setTimeout(() => {
+      dismissTimer.current = null;
+      previewGen.current++;
+      setPreview(null);
+    }, DISMISS_DELAY_MS);
+  }, []);
+  const onPreviewMouseEnter = useCallback(() => {
+    clearDismissTimer();
+  }, []);
+  // Unmount cleanup.
+  useEffect(
+    () => () => {
+      clearHoverTimer();
+      clearDismissTimer();
+    },
+    [],
+  );
 
   const closeMenuLocal = useCallback(() => {
     const rowId = menu?.rowId;
@@ -706,12 +824,16 @@ export default function Sidebar({
                 style={rowStyle}
                 onClick={() => {
                   if (isRenaming) return;
+                  closePreview();
                   onOpen(s);
                   onSessionSelected?.();
                 }}
                 onKeyDown={onRowKey}
+                onMouseEnter={(e) => onRowMouseEnter(s, e.currentTarget)}
+                onMouseLeave={onRowMouseLeave}
                 onContextMenu={(e) => {
                   e.preventDefault();
+                  closePreview();
                   setMenu({ rowId: s.id, x: e.clientX, y: e.clientY });
                 }}
                 tabIndex={0}
@@ -799,6 +921,21 @@ export default function Sidebar({
           onClose={onMenuClose}
         />
       )}
+
+      {preview && !menu && (() => {
+        const s = sessions?.find((x) => x.id === preview.rowId);
+        if (!s) return null;
+        return (
+          <SessionPreview
+            cwd={s.cwd || ''}
+            name={s.name || s.id}
+            text={preview.text}
+            anchorRect={preview.rect}
+            onMouseEnter={onPreviewMouseEnter}
+            onMouseLeave={onRowMouseLeave}
+          />
+        );
+      })()}
     </aside>
   );
 }
