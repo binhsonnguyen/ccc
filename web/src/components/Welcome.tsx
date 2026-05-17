@@ -5,6 +5,8 @@ interface Props {
   // Open the sidebar "New session" form. Wired from App so the card
   // doesn't need to know how the form is mounted (inline vs. drawer).
   onNewSession: () => void;
+  // Open the keyboard shortcuts cheatsheet (P-2).
+  onShowCheatsheet: () => void;
 }
 
 interface CardProps {
@@ -34,7 +36,7 @@ function Card({ icon, title, desc, hint, onClick, ariaLabel, disabled }: CardPro
   );
 }
 
-export default function Welcome({ onNewSession }: Props) {
+export default function Welcome({ onNewSession, onShowCheatsheet }: Props) {
   const { showToast } = useToast();
   // Resume "focuses sidebar" — we look up the first session row in the
   // DOM rather than threading a ref. The sidebar is always mounted
@@ -80,15 +82,10 @@ export default function Welcome({ onNewSession }: Props) {
           <Card
             icon="?"
             title="Keyboard shortcuts"
-            desc="Coming soon."
-            hint={formatKeys('?')}
-            ariaLabel="View keyboard shortcuts (coming soon)"
-            disabled
-            onClick={() =>
-              showToast('Keyboard cheatsheet coming in a later release', {
-                variant: 'info',
-              })
-            }
+            desc="See every binding."
+            hint={formatKeys('Shift+?')}
+            ariaLabel="View keyboard shortcuts"
+            onClick={onShowCheatsheet}
           />
         </div>
 

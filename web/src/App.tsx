@@ -4,8 +4,10 @@ import StatusBar from './components/StatusBar';
 import TabBar from './components/TabBar';
 import TerminalPane from './components/TerminalPane';
 import Welcome from './components/Welcome';
+import Palette, { type PaletteActions } from './components/Palette';
+import Cheatsheet from './components/Cheatsheet';
 import { ToastProvider, useToast } from './components/Toast';
-import { listSessions } from './lib/api';
+import { archiveSession, listSessions } from './lib/api';
 import { useShortcut } from './lib/shortcuts';
 import { disposeTerm, getTerm } from './lib/terminals';
 import type { C2Entry, Tab, TabStatus } from './types';
@@ -87,6 +89,10 @@ function AppInner() {
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeUuid, setActiveUuid] = useState<string | null>(null);
   const [view, setView] = useState<SidebarView>('active');
+  // Power-tool overlays (PLAN.md P-1, P-2). Mutually exclusive: opening
+  // one closes the other so we never stack two centered modals.
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [cheatsheetOpen, setCheatsheetOpen] = useState(false);
   // Increments whenever Welcome asks Sidebar to open the new-session
   // form. Sidebar watches this counter via effect and toggles its own
   // `creating` state. Counter (not bool) so repeated clicks always
@@ -182,14 +188,18 @@ function AppInner() {
       keys: 'Escape',
       scope: 'global',
       label: 'Close sidebar drawer',
-      when: () => narrow && sidebarOpen,
+      // Esc dispatch is fire-all (see lib/shortcuts.ts). When the
+      // palette or cheatsheet is open, their own Esc handlers should
+      // be the only ones to fire — otherwise Esc closes both the
+      // overlay and the drawer underneath, which is jarring.
+      when: () => narrow && sidebarOpen && !paletteOpen && !cheatsheetOpen,
       handler: () => {
         setSidebarOpen(false);
         userTouched.current = true;
         writeSidebarPref(false);
       },
     },
-    [narrow, sidebarOpen],
+    [narrow, sidebarOpen, paletteOpen, cheatsheetOpen],
   );
 
   const toggleSidebar = useCallback(() => {
@@ -221,6 +231,64 @@ function AppInner() {
       handler: () => toggleSidebar(),
     },
     [toggleSidebar],
+  );
+
+  // Palette + cheatsheet open shortcuts. Both guard against input focus
+  // so typing `?` in the new-session name field or `Mod+k` in the
+  // sidebar filter doesn't yank the user into an overlay. xterm renders
+  // its own textarea — same guard catches it.
+  const notInInput = () => {
+    const el = document.activeElement as HTMLElement | null;
+    if (!el) return true;
+    const tag = el.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA') return false;
+    if (el.isContentEditable) return false;
+    if (el.closest('.xterm')) return false;
+    return true;
+  };
+  const openPalette = useCallback(() => {
+    setCheatsheetOpen(false);
+    setPaletteOpen(true);
+  }, []);
+  const openCheatsheet = useCallback(() => {
+    setPaletteOpen(false);
+    setCheatsheetOpen(true);
+  }, []);
+  useShortcut(
+    {
+      id: 'palette.open',
+      keys: 'Mod+k',
+      scope: 'global',
+      label: 'Open command palette',
+      when: notInInput,
+      handler: () => openPalette(),
+    },
+    [openPalette],
+  );
+  useShortcut(
+    {
+      id: 'cheatsheet.open',
+      // `?` on US layouts is Shift+/, so the dispatcher's canonical
+      // form is "Shift+?", not "?". Register both so the on-screen
+      // hint and the actual binding agree.
+      keys: 'Shift+?',
+      scope: 'global',
+      label: 'Show keyboard shortcuts',
+      when: notInInput,
+      handler: () => openCheatsheet(),
+    },
+    [openCheatsheet],
+  );
+  useShortcut(
+    {
+      id: 'cheatsheet.open.alt',
+      keys: 'Mod+/',
+      scope: 'global',
+      label: 'Show keyboard shortcuts',
+      when: notInInput,
+      handler: () => openCheatsheet(),
+    },
+    [openCheatsheet],
   );
 
   const closeDrawer = useCallback(() => {
@@ -400,6 +468,67 @@ function AppInner() {
     );
   }, []);
 
+  // Palette helpers. closeAllTabs disposes terms + clears state in one
+  // pass; archiveActive looks up the c2 entry from the active tab and
+  // mutates via the API directly (cheaper than threading the Sidebar's
+  // doArchive callback through props). copyCwd reuses the same fallback
+  // pattern as StatusBar's copy hint.
+  const closeAllTabs = useCallback(() => {
+    for (const t of tabs) disposeTerm(t.claudeUuid);
+    setTabs([]);
+    setActiveUuid(null);
+  }, [tabs]);
+  const archiveActive = useCallback(async () => {
+    const t = tabs.find((x) => x.claudeUuid === activeUuid);
+    if (!t) return;
+    const entry = sessions?.find((s) => s.id === t.c2Id) ?? null;
+    if (!entry) return;
+    try {
+      const r = await archiveSession(entry.id);
+      showToast(
+        r.archived ? `Archived ${entry.name || entry.id}` : `Unarchived ${entry.name || entry.id}`,
+        { variant: 'info' },
+      );
+      void refresh();
+    } catch {
+      showToast('Archive failed', { variant: 'error' });
+    }
+  }, [activeUuid, refresh, sessions, showToast, tabs]);
+  const copyCwd = useCallback(
+    (cwd: string) => {
+      if (!cwd) return;
+      if (!navigator.clipboard) {
+        showToast('Copy failed — clipboard unavailable', { variant: 'error' });
+        return;
+      }
+      navigator.clipboard
+        .writeText(cwd)
+        .then(() => showToast('Copied cwd', { variant: 'info' }))
+        .catch(() => showToast('Copy failed', { variant: 'error' }));
+    },
+    [showToast],
+  );
+
+  const paletteActions: PaletteActions = {
+    refresh: () => void refresh(),
+    toggleSidebar,
+    openNewSession: () => {
+      if (narrow) {
+        setSidebarOpen(true);
+        userTouched.current = true;
+        writeSidebarPref(true);
+      }
+      setOpenNewSessionTick((n) => n + 1);
+    },
+    setView,
+    closeTab,
+    killTab,
+    closeAllTabs,
+    archiveActive: () => void archiveActive(),
+    copyCwd,
+    openCheatsheet,
+  };
+
   const appClass =
     'app' +
     (narrow ? ' narrow' : '') +
@@ -472,6 +601,7 @@ function AppInner() {
                 }
                 setOpenNewSessionTick((n) => n + 1);
               }}
+              onShowCheatsheet={openCheatsheet}
             />
           ) : (
             tabs.map((tab) => (
@@ -528,6 +658,18 @@ function AppInner() {
           );
         })()}
       </main>
+      <Palette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        sessions={sessions}
+        tabs={tabs}
+        activeUuid={activeUuid}
+        view={view}
+        onOpenSession={openTab}
+        onSwitchTab={setActiveUuid}
+        actions={paletteActions}
+      />
+      <Cheatsheet open={cheatsheetOpen} onClose={() => setCheatsheetOpen(false)} />
     </div>
   );
 }
