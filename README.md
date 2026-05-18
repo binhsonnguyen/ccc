@@ -49,6 +49,17 @@ Building from source needs Go 1.26+; both install paths need
 [`fzf`](https://github.com/junegunn/fzf) and (for the GUI) `claude`
 itself in `$PATH`.
 
+**Optional — auto-start server:** if you installed via brew and
+want `c3 gui` to open the browser instantly without spawning
+anything, run
+
+```sh
+brew services start c3
+```
+
+to keep `c3-server` running in the background (idle auto-shutdown
+is disabled in service mode).
+
 **Installed vs source builds.** The installer bakes a **fixed port
 7755** into c3-server (via `-ldflags`) so the GUI URL stays
 bookmarkable. Source builds (`go build`, `go run ./cmd/c3-server`,
