@@ -19,20 +19,35 @@ all stays in `~/.claude/projects/**`. You can stop using c3 and
 
 ## Install
 
+**Homebrew (macOS, Linux):**
+
+```sh
+brew install binhsonnguyen/tap/c3
+```
+
+Then add to your shell rc (bash/zsh only; fish auto-loads):
+
+```sh
+source "$(brew --prefix)/etc/c3/c3.sh"
+```
+
+**From source:**
+
 ```sh
 ./install.sh        # or: make install
 ```
 
-That builds `c3-bin` and `c3-server` into `~/.local/bin` and (for
-fish users) drops a function into `~/.config/fish/functions/`. For
+Builds `c3-bin` and `c3-server` into `~/.local/bin` and (for fish
+users) drops a function into `~/.config/fish/functions/`. For
 bash/zsh, the installer prints the one line to add to your rc:
 
 ```sh
 source /path/to/ccc/shell/c3.sh
 ```
 
-Needs Go 1.26+, [`fzf`](https://github.com/junegunn/fzf), and (for
-the GUI) `claude` itself in `$PATH`.
+Building from source needs Go 1.26+; both install paths need
+[`fzf`](https://github.com/junegunn/fzf) and (for the GUI) `claude`
+itself in `$PATH`.
 
 **Installed vs source builds.** The installer bakes a **fixed port
 7755** into c3-server (via `-ldflags`) so the GUI URL stays
