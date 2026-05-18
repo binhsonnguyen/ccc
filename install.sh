@@ -8,14 +8,18 @@ repo="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 bin_dir="${HOME}/.local/bin"
 mkdir -p "$bin_dir"
 
-echo "› building c3-bin"
-(cd "$repo" && go build -o "$bin_dir/c3-bin" ./cmd/c3-bin)
+# Version stamp: prefer `git describe`, fall back to "dev" for non-git
+# trees. Override with VERSION=v0.1.0 ./install.sh if needed.
+version="${VERSION:-$(cd "$repo" && git describe --tags --dirty --always 2>/dev/null || echo dev)}"
+
+echo "› building c3-bin (version $version)"
+(cd "$repo" && go build -ldflags "-X main.version=$version" -o "$bin_dir/c3-bin" ./cmd/c3-bin)
 echo "› installed: $bin_dir/c3-bin"
 
 # c3-server bakes in the installed default port (7755) via ldflag.
 # Source builds (plain `go build`) keep "0" → random; see Makefile.
-echo "› building c3-server (installed: port 7755)"
-(cd "$repo" && go build -ldflags '-X main.defaultListenPort=7755' -o "$bin_dir/c3-server" ./cmd/c3-server)
+echo "› building c3-server (version $version, installed: port 7755)"
+(cd "$repo" && go build -ldflags "-X main.defaultListenPort=7755 -X main.version=$version" -o "$bin_dir/c3-server" ./cmd/c3-server)
 echo "› installed: $bin_dir/c3-server"
 
 case ":$PATH:" in

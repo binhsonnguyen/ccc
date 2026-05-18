@@ -44,6 +44,11 @@ var (
 	webFS    = webdev.FS()
 )
 
+// version is set at build time via -ldflags "-X main.version=…".
+// "dev" is the default for plain `go build`; release binaries
+// (Makefile install, install.sh, goreleaser) set the semver tag.
+var version = "dev"
+
 // portFileCleanup is installed by run() once the discovery file exists,
 // so a top-level panic recover can still remove it. Defers inside run()
 // cover the normal path; this is the belt-and-braces case where a panic
@@ -52,6 +57,12 @@ var (
 var portFileCleanup func()
 
 func main() {
+	for _, a := range os.Args[1:] {
+		if a == "-v" || a == "--version" {
+			fmt.Println(version)
+			return
+		}
+	}
 	defer func() {
 		if r := recover(); r != nil {
 			if portFileCleanup != nil {

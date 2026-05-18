@@ -36,6 +36,7 @@ Usage:
   c3 gui              open the local web UI in your browser (spawns
                         c3-server detached if not already running)
   c3 -h, --help       show this help
+  c3 -v, --version    show version
 
 Environment:
   C3_NO_WRAPPER=1     also echo eval'd command to stderr
@@ -44,6 +45,11 @@ Environment:
 `
 
 var store = archivejson.New()
+
+// version is set at build time via -ldflags "-X main.version=…".
+// "dev" is the default for plain `go build` / `go install` so users
+// can tell an install-from-source build apart from a release binary.
+var version = "dev"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -62,6 +68,9 @@ func run(args []string) error {
 	switch args[0] {
 	case "-h", "--help":
 		fmt.Fprint(os.Stderr, usage)
+		return nil
+	case "-v", "--version":
+		fmt.Println(version)
 		return nil
 	case "-a":
 		return runPicker(picker.Options{ArchivedView: true}, true)

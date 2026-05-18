@@ -17,6 +17,9 @@ web/node_modules
 web/dist
 /bin
 
+# GoReleaser output
+/dist
+
 # Review agents drop screenshots here while inspecting the running app
 .review/
 .review-*

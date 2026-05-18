@@ -11,8 +11,15 @@
 
 PREFIX ?= $(HOME)/.local
 
-# Override only at install time; source builds keep "0" (random).
-INSTALL_LDFLAGS := -X main.defaultListenPort=7755
+# Version stamp for installed builds. "make install VERSION=v0.1.0"
+# overrides; default falls back to `git describe` so a local install
+# off main shows the commit it was built from.
+VERSION ?= $(shell git describe --tags --dirty --always 2>/dev/null || echo dev)
+
+# Override only at install time; source builds keep "0" (random) and
+# version "dev".
+SERVER_LDFLAGS := -X main.defaultListenPort=7755 -X main.version=$(VERSION)
+BIN_LDFLAGS    := -X main.version=$(VERSION)
 
 .PHONY: web web-install build server install clean
 
@@ -34,9 +41,9 @@ build: web server
 # the embedded bundle.
 install: web
 	mkdir -p $(PREFIX)/bin
-	go build -ldflags '$(INSTALL_LDFLAGS)' -o $(PREFIX)/bin/c3-server ./cmd/c3-server
-	go build                                -o $(PREFIX)/bin/c3-bin    ./cmd/c3-bin
-	@echo "installed → $(PREFIX)/bin/{c3-bin,c3-server} (port 7755)"
+	go build -ldflags '$(SERVER_LDFLAGS)' -o $(PREFIX)/bin/c3-server ./cmd/c3-server
+	go build -ldflags '$(BIN_LDFLAGS)'    -o $(PREFIX)/bin/c3-bin    ./cmd/c3-bin
+	@echo "installed → $(PREFIX)/bin/{c3-bin,c3-server} (port 7755, version $(VERSION))"
 
 clean:
 	rm -rf web/node_modules web/dist bin
