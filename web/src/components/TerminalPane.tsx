@@ -141,12 +141,18 @@ export default function TerminalPane({
             // generic "Disconnected".
             onError(uuid, msg.message || 'attach failed');
           } else if (msg.type === 'pending') {
-            // Server is spawning `claude` no-resume; disable input until
-            // ready arrives so we don't lose keystrokes the runner won't
-            // route to the not-yet-launched child.
-            entry.term.options.disableStdin = true;
+            // Server is spawning `claude` no-resume. We used to disable
+            // stdin here on the theory that early keystrokes would be
+            // lost before the child set up its PTY, but that created a
+            // deadlock with modern Claude Code: claude only writes its
+            // JSONL after the first user message, so the discovery
+            // loop's pending→ready transition would never fire and the
+            // user couldn't type to unblock it. The pending banner is
+            // enough of a visual cue; let the user type.
             onPending(uuid);
           } else if (msg.type === 'ready') {
+            // Defensive: re-enable stdin in case some earlier code path
+            // (or older bundle in another tab) had disabled it.
             entry.term.options.disableStdin = false;
             onReady(uuid);
           }
@@ -386,7 +392,8 @@ export default function TerminalPane({
             <span className="spinner" />
           </span>
           <span className="banner-text">
-            Starting Claude — waiting for session uuid…
+            New session — type a message to start. The session uuid is
+            assigned once claude writes its first JSONL.
           </span>
         </div>
       )}

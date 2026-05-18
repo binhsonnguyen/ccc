@@ -38,7 +38,12 @@ const graceAfterExit = 5 * time.Second
 // Discovery loop tunables for pending-uuid sessions (D-7). Poll claudefs
 // every discoveryInterval up to discoveryTimeout total before giving up.
 // The session keeps running; the user just won't see a uuid in the list
-// until the next manual bind. Counts: 30s / 500ms = 60 polls.
+// until the next manual bind.
+//
+// Timeout sized to fit modern Claude Code's behavior: the JSONL doesn't
+// appear until the user sends their first message, so the user-input
+// thinking time is part of the budget. 5 minutes is generous and still
+// well under c3-server's idle watchdog.
 //
 // Stored via atomics so tests can override safely without racing
 // against running discovery goroutines.
@@ -49,7 +54,7 @@ var (
 
 func init() {
 	discoveryIntervalNs.Store(int64(500 * time.Millisecond))
-	discoveryTimeoutNs.Store(int64(30 * time.Second))
+	discoveryTimeoutNs.Store(int64(5 * time.Minute))
 }
 
 func discoveryInterval() time.Duration { return time.Duration(discoveryIntervalNs.Load()) }
