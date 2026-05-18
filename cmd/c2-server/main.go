@@ -78,9 +78,17 @@ func run() error {
 		return nil
 	}
 
-	// 2. Bind 127.0.0.1:0 — strict loopback, OS picks the port.
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	// 2. Bind 127.0.0.1:<port>. Default is a fixed port so the URL stays
+	//    bookmarkable across launches; C2_SERVER_PORT=0 falls back to a
+	//    random OS-assigned port for dev/debug or to side-step a
+	//    bind-collision.
+	requestedPort := portFromEnv()
+	addr := fmt.Sprintf("127.0.0.1:%d", requestedPort)
+	ln, err := net.Listen("tcp", addr)
 	if err != nil {
+		if requestedPort != 0 {
+			return fmt.Errorf("listen %s: %w\nhint: set C2_SERVER_PORT=0 for a random port, or pick another", addr, err)
+		}
 		return fmt.Errorf("listen: %w", err)
 	}
 	port := ln.Addr().(*net.TCPAddr).Port
@@ -818,6 +826,28 @@ func idleTimeoutFromEnv() time.Duration {
 		return 15 * time.Minute
 	}
 	return time.Duration(n) * time.Minute
+}
+
+// Default listen port for everyday use. Picked from the IANA
+// unassigned range so collisions with dev-server defaults (3000,
+// 5173, 8000, 8080) are unlikely. Set C2_SERVER_PORT=0 to fall back
+// to a random OS-assigned port (useful when bind-collision happens
+// or for dev/debug scenarios).
+const defaultListenPort = 7755
+
+// portFromEnv reads C2_SERVER_PORT. Unset → defaultListenPort. "0" →
+// 0 (random). Any other valid uint16 → that port. Invalid → default.
+func portFromEnv() int {
+	v := os.Getenv("C2_SERVER_PORT")
+	if v == "" {
+		return defaultListenPort
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil || n < 0 || n > 65535 {
+		fmt.Fprintf(os.Stderr, "c2-server: warn: invalid C2_SERVER_PORT=%q, using default %d\n", v, defaultListenPort)
+		return defaultListenPort
+	}
+	return n
 }
 
 // startIdleWatcher polls the manager for activity and closes `fire` when

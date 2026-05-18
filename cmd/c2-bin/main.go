@@ -39,6 +39,8 @@ Usage:
 
 Environment:
   C2_NO_WRAPPER=1     also echo eval'd command to stderr
+  C2_SERVER_PORT=N    c2-server listen port (default 7755; 0 = random)
+  C2_SERVER_IDLE_MINUTES=N  shut server down after N min idle (default 15, 0 = off)
 `
 
 var store = archivejson.New()
