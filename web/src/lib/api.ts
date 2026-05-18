@@ -139,6 +139,44 @@ export async function fetchActivity(c3Id: string): Promise<ActivityResponse | nu
   };
 }
 
+// SearchMatch mirrors adapters/claudefs.SearchMatch. One hit per Claude
+// session; snippet is a ~60-char window centered on the match with ANSI
+// stripped and line breaks collapsed (see search.go buildSnippet).
+export interface SearchMatch {
+  claudeUuid: string;
+  cwd: string;
+  summary?: string;
+  snippet: string;
+  matchedAt: string;
+}
+
+export interface SearchResponse {
+  matches: SearchMatch[];
+  truncated: boolean;
+}
+
+// searchSessions grep-scans Claude's JSONL files for `q` (case-insensitive).
+// The server requires q to be ≥3 chars; the client also debounces before
+// calling so a fast typist doesn't fire intermediate requests.
+//
+// The optional AbortSignal lets the sidebar supersede an in-flight query
+// when the user keeps typing: stale responses throw AbortError which the
+// caller swallows.
+export async function searchSessions(
+  q: string,
+  limit = 20,
+  signal?: AbortSignal,
+): Promise<SearchResponse> {
+  const qs = new URLSearchParams({ q, limit: String(limit) });
+  const r = await fetch(`/api/sessions/search?${qs.toString()}`, { signal });
+  if (!r.ok) throw await readError(r);
+  const j = await r.json();
+  return {
+    matches: j?.matches ?? [],
+    truncated: !!j?.truncated,
+  };
+}
+
 export function ptyWsURL(c3Id: string): string {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${proto}//${location.host}/api/sessions/${encodeURIComponent(c3Id)}/pty`;

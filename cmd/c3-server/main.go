@@ -132,6 +132,7 @@ func run() error {
 	})
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("/api/sessions/search", handleSessionsSearch)
 	mux.HandleFunc("/api/sessions", handleSessionsCollection(originHost, originHostAlt))
 	mux.HandleFunc("/api/sessions/", routeSession(originHost, originHostAlt))
 	mux.HandleFunc("/api/claude-sessions", handleClaudeSessions)
@@ -557,6 +558,42 @@ func handleClaudeSessions(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{
 		"unbound": unbound,
 		"cwds":    cwds,
+	})
+}
+
+// handleSessionsSearch grep-streams Claude JSONL files for a case-insensitive
+// substring match of ?q=. GET only, no CSRF surface (read-only). Returns
+// {matches:[{claudeUuid,cwd,snippet,matchedAt}], truncated:bool}. The
+// concrete adapter call is used directly (no port abstraction) because
+// search is server-only — core/usecase has no reason to depend on it.
+func handleSessionsSearch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	q := r.URL.Query().Get("q")
+	limit := 0
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			limit = n
+		}
+	}
+	matches, truncated, err := claudeFS.Search(q, limit)
+	if err != nil {
+		if _, ok := err.(claudefs.ErrQueryTooShort); ok {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		httpError(w, err, http.StatusInternalServerError)
+		return
+	}
+	if matches == nil {
+		matches = []claudefs.SearchMatch{}
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, map[string]any{
+		"matches":   matches,
+		"truncated": truncated,
 	})
 }
 

@@ -10,6 +10,8 @@ import {
   fetchSessionTail,
   renameSession,
   removeSession,
+  searchSessions,
+  type SearchMatch,
 } from '../lib/api';
 import { useShortcut } from '../lib/shortcuts';
 import { cwdMonogram, cwdTint, cwdTintFg } from '../lib/cwdTint';
@@ -210,6 +212,24 @@ export default function Sidebar({
   // sidebar's job is to surface sessions, not remember a search.
   const [filter, setFilter] = useState('');
   const filterInputRef = useRef<HTMLInputElement | null>(null);
+  // Deep search (full-text JSONL grep). State machine:
+  //   idle       — q<3 chars, or no deep-search requested
+  //   loading    — request in flight
+  //   results    — array (possibly empty)
+  //   error      — fetch failed
+  // `searchForced` is set true when the user clicks "Search messages…"
+  // so we run the query even when there ARE name matches.
+  const [searchState, setSearchState] = useState<
+    | { kind: 'idle' }
+    | { kind: 'loading' }
+    | { kind: 'results'; matches: SearchMatch[]; truncated: boolean; q: string }
+    | { kind: 'error'; message: string }
+  >({ kind: 'idle' });
+  const [searchForced, setSearchForced] = useState(false);
+  // Token guards against stale responses: incremented on every new query,
+  // each fetch captures its token and discards itself if outdated.
+  const searchTokenRef = useRef(0);
+  const searchAbortRef = useRef<AbortController | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   // Set transiently when Esc dismisses the rename input; blur fires after
   // unmount and would otherwise commit the draft (PATCH). Read+reset in
@@ -703,6 +723,70 @@ export default function Sidebar({
       })
     : sessions;
 
+  // Deep-search trigger. Runs when q has ≥3 chars AND (no name matches
+  // OR the user explicitly asked). Debounced 250ms — each keystroke
+  // resets the timer. Stale responses are dropped via the token ref.
+  const nameMatchCount = visibleSessions?.length ?? 0;
+  const shouldDeepSearch =
+    q.length >= 3 && sessions !== null && (searchForced || nameMatchCount === 0);
+  useEffect(() => {
+    // Reset the forced flag when the query shrinks below the threshold
+    // — re-typing should not silently re-fire the search.
+    if (q.length < 3) {
+      if (searchForced) setSearchForced(false);
+      if (searchState.kind !== 'idle') setSearchState({ kind: 'idle' });
+      return;
+    }
+    if (!shouldDeepSearch) {
+      // We have name matches and user hasn't forced — go back to idle.
+      if (searchState.kind !== 'idle') setSearchState({ kind: 'idle' });
+      return;
+    }
+    const token = ++searchTokenRef.current;
+    // Cancel any in-flight predecessor.
+    if (searchAbortRef.current) searchAbortRef.current.abort();
+    const ac = new AbortController();
+    searchAbortRef.current = ac;
+    const timer = window.setTimeout(() => {
+      setSearchState({ kind: 'loading' });
+      searchSessions(q, 20, ac.signal)
+        .then((res) => {
+          if (searchTokenRef.current !== token) return;
+          setSearchState({
+            kind: 'results',
+            matches: res.matches,
+            truncated: res.truncated,
+            q,
+          });
+        })
+        .catch((err) => {
+          if (ac.signal.aborted || searchTokenRef.current !== token) return;
+          const msg = err instanceof ApiError ? err.body : 'Search failed';
+          setSearchState({ kind: 'error', message: msg });
+        });
+    }, 250);
+    return () => {
+      window.clearTimeout(timer);
+      ac.abort();
+    };
+    // searchState intentionally not a dep — would loop the effect on
+    // every setState. We only re-run when the inputs change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q, shouldDeepSearch]);
+
+  // Lookup map: claudeUuid → C3Entry, used to render a search result row
+  // as a clickable session (when bound) or a disabled hint (when not).
+  const sessionsByUuid = new Map<string, C3Entry>();
+  for (const s of sessions ?? []) {
+    if (s.claudeUuid) sessionsByUuid.set(s.claudeUuid, s);
+  }
+  const openSearchMatch = (m: SearchMatch) => {
+    const entry = sessionsByUuid.get(m.claudeUuid);
+    if (!entry) return; // unbound: click is disabled below
+    onOpen(entry);
+    onSessionSelected?.();
+  };
+
   // Inline width override only in wide mode — narrow / drawer keeps the
   // fixed 280px from CSS so the slide-in math doesn't depend on a JS var.
   const asideStyle = resizable ? { width: `${width}px`, flexBasis: `${width}px` } : undefined;
@@ -1024,6 +1108,86 @@ export default function Sidebar({
             );
           })}
         </ul>
+      )}
+
+      {/* Deep-search results section. Rendered below the regular list
+          whether or not name matches are present (when both exist, the
+          user explicitly clicked "Search messages…"). */}
+      {q.length >= 3 && (
+        <div className="sidebar-search">
+          {nameMatchCount > 0 && searchState.kind === 'idle' && (
+            <button
+              type="button"
+              className="sidebar-search-trigger"
+              onClick={() => setSearchForced(true)}
+              title="Full-text search across Claude JSONL files"
+            >
+              Search messages for <code>{filter}</code>…
+            </button>
+          )}
+          {searchState.kind === 'loading' && (
+            <div className="sidebar-search-status">Searching messages…</div>
+          )}
+          {searchState.kind === 'error' && (
+            <div className="sidebar-search-status sidebar-search-error">
+              {searchState.message}
+            </div>
+          )}
+          {searchState.kind === 'results' && (
+            <>
+              <div className="sidebar-search-header">
+                Messages ({searchState.matches.length}
+                {searchState.truncated ? '+' : ''})
+              </div>
+              {searchState.matches.length === 0 ? (
+                <div className="sidebar-search-status">
+                  No messages match <code>{filter}</code>.
+                </div>
+              ) : (
+                <ul className="sidebar-search-list">
+                  {searchState.matches.map((m) => {
+                    const entry = sessionsByUuid.get(m.claudeUuid);
+                    const bound = !!entry;
+                    const name = entry?.name || entry?.id || m.claudeUuid.slice(0, 8);
+                    return (
+                      <li
+                        key={m.claudeUuid}
+                        className={
+                          'sidebar-search-row' + (bound ? '' : ' unbound')
+                        }
+                        onClick={bound ? () => openSearchMatch(m) : undefined}
+                        role={bound ? 'button' : undefined}
+                        tabIndex={bound ? 0 : -1}
+                        onKeyDown={
+                          bound
+                            ? (e) => {
+                                if (e.key === 'Enter' || e.key === ' ') {
+                                  e.preventDefault();
+                                  openSearchMatch(m);
+                                }
+                              }
+                            : undefined
+                        }
+                        title={m.cwd}
+                      >
+                        <div className="sidebar-search-name">{name}</div>
+                        <div className="sidebar-search-cwd">{m.cwd}</div>
+                        <div className="sidebar-search-snippet">
+                          {m.snippet}
+                        </div>
+                        {!bound && (
+                          <div className="sidebar-search-hint">
+                            Click <em>Bind</em> in the sidebar first.
+                          </div>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </>
+          )}
+        </div>
       )}
 
       {menu && currentMenuItems.length > 0 && (
