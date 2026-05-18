@@ -894,6 +894,33 @@ code {
   gap: 6px;
 }
 
+.bind-uuid-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.bind-uuid-input {
+  font: inherit;
+  font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+  font-size: var(--text-sm);
+  background: rgba(255,255,255,0.04);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  padding: 6px 8px;
+  min-width: 0;
+}
+.bind-uuid-input:focus { border-color: var(--accent); outline: none; }
+.bind-uuid-hint {
+  grid-column: 1 / -1;
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+  margin-top: 2px;
+}
+.bind-uuid-hint-ok { color: var(--ok); }
+
 .bind-list {
   list-style: none;
   margin: 0;

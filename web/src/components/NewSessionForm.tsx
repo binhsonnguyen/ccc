@@ -51,6 +51,9 @@ export default function NewSessionForm({ drawer, onCancel, onCreated, showToast 
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [dropdownOpen, setDropdownOpen] = useState(false);
+  // Manual uuid entry in Bind mode. Accepts a full Claude uuid or any
+  // unique prefix (8+ chars) that resolves against `unbound`.
+  const [uuidQuery, setUuidQuery] = useState('');
   const firstInputRef = useRef<HTMLInputElement | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const previouslyFocused = useRef<HTMLElement | null>(null);
@@ -168,6 +171,7 @@ export default function NewSessionForm({ drawer, onCancel, onCreated, showToast 
         // Invalidate cache so the bind dialog refresh excludes this uuid.
         cache = null;
         createdId = null;
+        setUuidQuery('');
         onCreated(bound);
       } catch (err) {
         // Rollback the pending entry created in the first step. We force
@@ -317,6 +321,67 @@ export default function NewSessionForm({ drawer, onCancel, onCreated, showToast 
 
       {mode === 'bind' && (
         <div className="newsession-body">
+          {/* Manual uuid entry — for when the user knows the id (from
+            * `claude` output, another machine, etc.) and doesn't want
+            * to scroll. Resolves against `unbound` so we still have
+            * the cwd to create the c2 entry with. */}
+          {(() => {
+            const q = uuidQuery.trim().toLowerCase();
+            const matches = q.length >= 8
+              ? unbound.filter((s) => s.uuid.toLowerCase().startsWith(q))
+              : [];
+            const resolved = matches.length === 1 ? matches[0] : null;
+            const hint =
+              q.length === 0
+                ? ''
+                : q.length < 8
+                  ? 'Type at least 8 characters of the uuid.'
+                  : matches.length === 0
+                    ? "No unbound Claude session with that uuid prefix."
+                    : matches.length > 1
+                      ? `${matches.length} unbound sessions share that prefix — type more.`
+                      : `Match: ${resolved!.cwd}`;
+            return (
+              <div className="bind-uuid-row">
+                <input
+                  type="text"
+                  className="bind-uuid-input"
+                  placeholder="Bind by Claude uuid (paste / type prefix)"
+                  value={uuidQuery}
+                  onChange={(e) => setUuidQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && resolved && !submitting) {
+                      e.preventDefault();
+                      void chooseBind(resolved);
+                    }
+                  }}
+                  disabled={submitting}
+                  aria-label="Claude session uuid"
+                  spellCheck={false}
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                />
+                <button
+                  type="button"
+                  className="btn btn-sm primary"
+                  disabled={!resolved || submitting}
+                  onClick={() => resolved && void chooseBind(resolved)}
+                >
+                  Bind
+                </button>
+                {hint && (
+                  <div
+                    className={
+                      'bind-uuid-hint' +
+                      (matches.length === 1 ? ' bind-uuid-hint-ok' : '')
+                    }
+                  >
+                    {hint}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
           {unbound.length === 0 ? (
             <div className="empty-hint" style={{ padding: '10px 4px' }}>
               No unbound Claude sessions found.
