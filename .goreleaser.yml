@@ -68,6 +68,39 @@ changelog:
       - "^chore:"
       - "^Merge "
 
+brews:
+  - name: c3
+    repository:
+      owner: binhsonnguyen
+      name: homebrew-tap
+      branch: main
+    directory: Formula
+    homepage: "https://github.com/binhsonnguyen/ccc"
+    description: "Personal Claude Code session manager — CLI + web GUI"
+    license: "MIT"
+    # fzf powers the c3 picker; claude is recommended but not strictly a
+    # build dep, so left out of dependencies (most users have it already
+    # if they want c3).
+    dependencies:
+      - name: fzf
+    install: |
+      bin.install "c3-bin"
+      bin.install "c3-server"
+      (etc/"c3").install "shell/c3.sh"
+      fish_function_path.install "shell/c3.fish"
+    caveats: |
+      To enable the `c3` command in bash/zsh, add to your shell rc:
+
+        source "$(brew --prefix)/etc/c3/c3.sh"
+
+      Fish users: the function is auto-loaded.
+
+      The GUI server listens on 127.0.0.1:7755 by default. Override
+      with C3_SERVER_PORT=N (or =0 for a random port).
+    test: |
+      system "#{bin}/c3-bin", "--version"
+      system "#{bin}/c3-server", "--version"
+
 release:
   github:
     owner: binhsonnguyen
