@@ -1,5 +1,14 @@
 # cc-terminal — Plan for B + C + D + power-tool layer
 
+> **Status: shipped (2026-05-15 → 2026-05-18).** Bucket A landed
+> first, then PRs 1–10 in the order spelled out at the bottom of
+> this doc. The text below is preserved as historical record — it
+> shows the design *before* implementation, including the items the
+> per-PR counter-reviews caught and forced changes on. For the
+> shipped architecture see `GUI-DESIGN.md`. PRs in git log are
+> `Bucket A: …` through `PR 10: …`, plus follow-ups for `bind by
+> uuid` and the fixed default port (7755).
+
 Bucket A (a11y + correctness) is shipped. This doc plans everything
 that remains: feature parity with the v4.1 CLI (D), the production
 shell pass (B), the distinctive UX layer (C), and the power-tool

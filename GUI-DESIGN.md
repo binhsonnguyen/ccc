@@ -1,230 +1,222 @@
-# cc — GUI Design (v5, draft)
+# cc — GUI Design (v5)
 
-Successor direction on top of v4.1. v4.1 (CLI resumer) stays; v5 adds a web
-GUI as a **thin wrapper** around `claude --resume`, not a replacement.
+v4.1 (CLI resumer, see `DESIGN.md`) stays as-is. v5 adds a web GUI as
+a **thin wrapper** around `claude --resume`, not a replacement. This
+doc captures the design rules that are load-bearing for future
+changes; the per-PR scope and history live in `PLAN.md`.
 
 ## North star
 
-> A GUI that connects to a Claude Code chat session, plus light utilities
-> (list sessions, show working dir). **Thin** and **durable**: the user must
-> always be able to `claude --resume <uuid>` directly without this app.
+> A GUI that connects to a Claude Code chat session, plus light
+> utilities (list, archive, search, etc.). **Thin** and **durable**:
+> the user must always be able to `claude --resume <uuid>` directly
+> without this app.
 
 Concrete consequences of "thin":
 
 - **No parallel data store.** Sessions, messages, history all live in
-  Claude Code's own `~/.claude/projects/**/*.jsonl`. cc reads, never owns.
-- **No reimplementation of the chat loop.** Anthropic SDK / Agent SDK are
-  ruled out — they would replace `claude`'s tool-use, MCP, hooks, and
-  create a fork of the data model.
-- The GUI **hosts a PTY running the real `claude` binary** and pipes it
-  to the browser via WebSocket. xterm.js renders. This is the same
-  pattern as ttyd / gotty / code-server.
-- Why v4.1's "PTY infeasible" doesn't apply: v1 was a *terminal*-hosted
-  PTY (terminal-in-terminal → image paste, keybinding, resize hell). A
-  browser xterm.js + WS PTY bridge is a well-trodden path with none of
-  those blockers.
+  Claude Code's own `~/.claude/projects/**/*.jsonl`. cc reads, never
+  owns. The only cc-owned file is `archived.json` (visibility flags
+  + names for c2 entries — not chat data).
+- **No reimplementation of the chat loop.** Anthropic SDK / Agent SDK
+  are ruled out — they would replace `claude`'s tool-use, MCP, hooks,
+  and create a fork of the data model.
+- The GUI **hosts a PTY running the real `claude` binary** and pipes
+  it to the browser via WebSocket. xterm.js renders. Same pattern as
+  ttyd / gotty / code-server.
 
 ## Allowed server state
 
-cc-server may keep transient, in-memory state *derived* from the PTY stream
-(scrollback ring buffer, bytes/sec activity counter). These never persist to
-disk, never become a source of truth, and disappear with the server. They are
-read-only views that help the GUI; tearing the server down loses them and
-that's fine — the data still lives in Claude's JSONL.
+cc-server may keep transient, in-memory state *derived* from the PTY
+stream:
+
+- Per-PTY scrollback ring buffer (~2 MB) — feeds reattach replay and
+  the hover preview endpoint.
+- Per-PTY bytes/sec activity ring (60 × 1 s) — feeds the sidebar
+  sparkline.
+
+These never persist to disk, never become a source of truth, and
+disappear with the server. The chat data still lives in Claude's
+JSONL; tearing the server down loses these views and that's fine.
 
 ## UX model
 
-Inspired by https://www.thecompanion.sh/ — sidebar of sessions, tab bar of
-open PTYs, terminal pane on the right.
+Inspired by https://www.thecompanion.sh/ — sidebar of sessions, tab
+bar of open PTYs, terminal pane on the right.
 
-- **Sidebar**: list of sessions (uuid, cwd, title/first-message, last
-  activity). Same data as the current fzf picker. Archive/unarchive
-  controls.
-- **Tab bar**: each tab = one live PTY attached to one session uuid.
-- **Multiple PTYs in parallel.** Switching tab does **not** kill PTY.
-  Closing tab = detach (PTY keeps running server-side so reopening the
-  session re-attaches and shows scrollback). Explicit "kill" button to
-  actually terminate.
-- **PTY identity = session uuid.** Opening a session that already has a
-  live PTY attaches to the existing PTY (tmux-style), does not spawn a
-  second `claude --resume` on the same uuid.
+- **Sidebar**: list sessions; row actions menu (rename / archive /
+  remove / copy); segmented Active|Archived view; inline filter; "+
+  New session" inline form (with Bind-existing mode); resizable
+  width; collapses to a drawer under 800 px viewport.
+- **Tab bar**: each tab is one live PTY attached to one session. Drag
+  to reorder. Tabs survive switching; closing a tab detaches but
+  leaves the PTY running so reopening reattaches and replays.
+- **PTY identity = session uuid.** Opening a session that's already
+  attached **kicks** the previous client (single-attach), then this
+  client gets a scrollback replay.
+- **Pending sessions** (entry exists but Claude hasn't created a
+  JSONL for that cwd yet) open in a tab too — server spawns `claude`
+  *without* `--resume` and watches for the first JSONL write, then
+  PATCHes the entry with the discovered uuid. UI surfaces
+  `{type:"pending"}` → `{type:"ready"}` so input is disabled until
+  the upgrade lands.
 
-## Architecture (clean / hexagonal)
+## Architecture (clean / hexagonal, shipped state)
 
 ```
-core/                          -- pure Go, no I/O
-  session.go                   -- Session entity
-  ports.go                     -- SessionRepo, ArchiveStore, ClaudeRunner
+core/                            -- pure Go, no I/O
+  session.go                     -- Session + ArchiveFile entities, methods,
+                                    Find / List* / AddEntry / Add/RemoveArchived
+  ports.go                       -- ArchiveStore + SessionsView (read-only
+                                    window on the live PTY manager)
   usecase/
-    list_sessions.go
-    archive_session.go
-    resume_session.go          -- returns a runner handle; doesn't exec
+    archive.go                   -- ToggleArchive
+    bind.go                      -- Bind (adopt an existing claude uuid)
+    new_entry.go                 -- NewEntry (validate + AddEntry under lock)
+    remove.go                    -- Remove (gates on live PTY unless forced)
+    rename.go                    -- Rename
+    errors.go                    -- sentinel ErrNotFound / ErrPTYLive / etc.
 
 adapters/
-  claudefs/                    -- SessionRepo over ~/.claude/projects (moved from internal/sessions)
-  archivejson/                 -- ArchiveStore over archived.json     (moved from internal/store)
-  execrunner/                  -- ClaudeRunner that exec()s claude (for CLI)
-  ptyrunner/                   -- ClaudeRunner that spawns claude in a PTY (for server)
+  claudefs/                      -- reads ~/.claude/projects; Scan, ScanProject, Cwds
+  archivejson/                   -- ArchiveStore over archived.json; Mutate wraps
+                                    read-modify-write in syscall.Flock
+  ptyrunner/                     -- spawns `claude [--resume <uuid>]` in a PTY
 
-server/                        -- thin HTTP/WS, depends only on core
-  GET  /api/sessions
-  POST /api/sessions/:id/archive
-  POST /api/sessions/:id/unarchive
-  WS   /api/sessions/:id/pty   -- bidirectional bytes + JSON control frames
-                                  (resize, kill, ping)
-  GET  /*                      -- static, serves the built web/ SPA
-
-web/                           -- React + Vite + TypeScript + xterm.js
-  sidebar, tab bar, terminal panes
-  one WS per open tab
+internal/
+  picker/                        -- fzf wrapper for the CLI
+  ptymgr/                        -- live PTY map keyed by session key (uuid when
+                                    bound, c2 id while pending); scrollback ring,
+                                    activity ring, single-attach kick,
+                                    discovery loop for pending uuids
+  webdev/                        -- go:embed of the built web/ bundle
 
 cmd/
-  c2-bin/                      -- existing CLI; uses core + execrunner.
-                                  Behavior unchanged: exec claude --resume.
-  c2-server/                   -- runs server + serves web/.
-                                  Entrypoint for `cc gui`.
+  c2-bin/                        -- CLI; calls core in-process and exec's claude.
+                                    `c2 gui` spawns c2-server detached.
+  c2-server/                     -- HTTP+WS on 127.0.0.1; serves embedded SPA.
+
+web/                             -- React 18 + Vite + TypeScript + xterm.js
+                                    + vanilla CSS. Built to internal/webdev/assets.
 ```
 
-CLI is **not** a thin client of the server. It calls core directly
-in-process and `exec`s claude — preserves the v4.1 promise that the CLI
-keeps working with zero daemon.
+The CLI is **not** a thin client of the server. It uses core
+in-process and exec's claude directly — preserves v4.1's no-daemon
+guarantee. The server uses the same core + use-cases.
 
-## Web stack
+## HTTP surface (shipped)
 
-**React + Vite + TypeScript + xterm.js.** Chosen for ecosystem longevity
-(the "dùng lâu được" criterion); Vite gives fast HMR; React's component
-model fits multi-tab/sidebar state better than vanilla. Svelte/Solid are
-faster at runtime but smaller ecosystems — not worth the tradeoff for a
-personal tool meant to last. If the maintainer already has Svelte
-fluency, SvelteKit is an acceptable swap; the server contract doesn't
-change.
+All under `127.0.0.1:<port>`. Mutating routes carry a same-origin
+CSRF check; the rest are GET-only.
+
+| Route | Method | Purpose |
+|---|---|---|
+| `/api/sessions?archived&include=live` | GET | list active/archived; `live` flag from ptymgr.HasUUID |
+| `/api/sessions` | POST | create a pending entry from `{cwd, name}` |
+| `/api/sessions/:id` | GET | fetch one entry |
+| `/api/sessions/:id` | PATCH | rename, body `{name}` |
+| `/api/sessions/:id` | DELETE | remove; 409 if PTY live unless `?force=1` |
+| `/api/sessions/:id/archive` | POST | toggle archived flag |
+| `/api/sessions/:id/bind` | POST | adopt an existing claudeUuid, body `{claudeUuid}` |
+| `/api/sessions/:id/pty` | WS | bidirectional bytes + JSON control |
+| `/api/sessions/:id/tail?bytes=N` | GET | last N bytes of PTY ring buffer (text/plain). 204 if no live PTY |
+| `/api/sessions/:id/activity` | GET | `{buckets: [60]uint32}` bytes/sec ring. 204 if no live PTY |
+| `/api/claude-sessions` | GET | `{unbound, cwds}` for the Bind dialog + cwd picker |
+| `/assets/*`, `/` | GET | static React bundle (embedded) |
+
+**ID contract (load-bearing).** Every `/api/sessions/:id/...` route
+addresses by the **c2-internal id** (8 hex chars). The pty manager
+keys live sessions by their session key — claudeUuid when bound, c2
+id while pending — and `handleSessionPTY` resolves the mapping
+internally. The web client tracks both: `claudeUuid` (dedup key for
+the in-memory xterm Map) and `c2Id` (URL addressing key). Don't
+conflate them; PR 2 launched with the client sending claudeUuid in
+the URL and every WS open 404'd — the fix is in commit history but
+the lesson stays here.
+
+**WS control frames.** Client → server: binary = stdin; text JSON
+`{type:"resize",cols,rows}` or `{type:"kill"}`. Server → client:
+binary = stdout; text JSON `{type:"pending"|"ready"|"kicked"|"exit"|"error"}`.
 
 ## Server lifecycle
 
-- `cc gui` (new subcommand) spawns the server on `127.0.0.1:<port>` and
-  opens the default browser.
-- Server is **local-only**, no LAN/remote access (not a goal).
-- Server **auto-shuts down** after N minutes of zero connected clients
-  AND zero live PTYs — avoids a silent daemon hoarding RAM.
-- Killing the server kills all PTYs. (PTYs are not designed to survive
-  the server; durability comes from JSONL being written by `claude`
-  itself, not from keeping processes alive across restarts.)
+- `c2 gui` (CLI subcommand) spawns c2-server detached and opens the
+  browser. Re-running finds the live server via the discovery file
+  and just opens the browser — no duplicate.
+- **Default port 7755** (fixed for bookmark-ability). Override:
+  `C2_SERVER_PORT=NNNN` or `=0` for a random OS-assigned port.
+- Strict loopback bind. Same-origin Origin check on mutating REST
+  and on WS `Accept`. No LAN access; not a goal.
+- **Idle auto-shutdown** after `C2_SERVER_IDLE_MINUTES` (default 15)
+  of zero live PTYs *and* zero attached clients. Set to 0 to
+  disable. A generation counter in the manager closes the race
+  between the watcher's decision and a fresh attach.
+- Discovery file: `~/.local/share/cc/server.port` records port + pid
+  on start and is removed on graceful shutdown (and on panic via a
+  recover hook). Stale entries are detected via `kill -0` so a
+  crashed previous run doesn't block startup.
+- Killing the server kills all PTYs. Durability comes from `claude`
+  writing its own JSONL, not from keeping PTYs alive across restarts.
 
-## Known limitations (from review, 2026-05-14)
+## Concurrency rules (load-bearing)
 
-These are accepted up front. Don't discover them after refactoring.
+- **Single-attach per PTY.** Opening a session that's already
+  attached kicks the previous client (sends `{type:"kicked"}`, then
+  close); the new client gets a scrollback replay.
+- **Replay ordering.** Replay must be issued under the same lock the
+  reader goroutine takes, so a fresh client never sees a new chunk
+  before the snapshot.
+- **WS reconnect on tab refresh = fresh attach.** Server replays the
+  ring; no sequence numbers needed at this size.
+- **archived.json RMW.** Both CLI and server can write. All
+  mutations go through `archivejson.Store.Mutate`, which wraps the
+  read-modify-write in `syscall.Flock` on a sidecar `.lock` file.
+- **Discovery race for pending uuids.** Two pending sessions in the
+  same cwd would both see the same new uuid pop into claudefs. The
+  manager's `claimedUUIDs` map atomically claims a uuid before
+  firing the bind hook so the second one drops it.
 
-- **Image paste (Cmd+V) will break.** Claude Code relies on the native
-  terminal emulator catching clipboard images and forwarding via OSC 1337
-  (iTerm) or the Kitty image protocol. xterm.js does not support OSC 1337
-  inline image *upload* from client. Either feature is dropped in GUI,
-  or we add a custom clipboard→base64→stdin hack later. Out of scope for
-  v5 MVP.
-- **Drag-drop file** will likewise break — native terminals handle it,
-  xterm.js needs custom JS handling. Defer.
-- **Terminal capability queries** (`\e[c`, `\e[6n`) — xterm.js answers,
-  but Claude may fall back to ASCII rendering in spots. Cosmetic, accept.
-- **Auth re-login flow** (claude prints OAuth URL) — actually nicer in
-  browser than native terminal; the URL is clickable.
+## Web client conventions
 
-## Concurrency + state, made explicit (from review)
+- **React 18 + Vite + TS + xterm.js + vanilla CSS.** No UI lib.
+- **xterm instances live outside the React tree** (`lib/terminals.ts`
+  Map keyed by claudeUuid) so switching tabs doesn't dispose them.
+  All panes mount; inactive ones are hidden with CSS.
+- **Shortcut registry** (`lib/shortcuts.ts`). Every key binding
+  routes through `useShortcut({id, keys, scope, when, handler,
+  label})`. Scopes: `global`, `tab-focused`, `sidebar-focused`,
+  `menu-focused`. The cheatsheet (`?`) reads `listShortcuts()`.
+- **CSRF for mutations.** All POST/PATCH/DELETE go through the
+  server's same-origin guard; the browser's automatic Origin header
+  is what carries it.
+- **No localStorage of chat data.** Sidebar width, sidebar
+  open/closed, optional mention regex, and tab order are stored
+  client-side; nothing related to session content is.
 
-- **Per-PTY scrollback ring buffer.** Server must hold ~1–4 MB of raw
-  bytes per live PTY so a newly-attached client replays output and isn't
-  blank until the next stdout. Cutting the buffer must respect ESC
-  sequence boundaries (don't slice mid-CSI); easiest is to start replay
-  from the most recent alt-screen clear.
-- **Single-attach per PTY.** Opening a session that's already attached
-  elsewhere **kicks the previous client** (sends a close frame, then the
-  new client attaches). tmux-style multi-attach + shared stdin is
-  rejected: with a single user it only produces confusion. UI must show
-  a "this session is open in another tab/window — switching attach
-  here" notice when this happens.
-- **WS reconnect on tab refresh.** Treat as a fresh attach: server kills
-  the old WS, replays scrollback to the new one. Sequence numbers not
-  needed; whole-buffer replay is fine at this size.
-- **archived.json race between CLI and server.** Both processes do
-  read-modify-write. Atomic tmp+rename prevents partial files but not
-  lost updates. Wrap RMW in `flock(2)` on a sidecar `archived.json.lock`.
-  Implement in the `archivejson` adapter so both clients get it for free.
-- **Server discovery.** Server writes `~/.local/share/cc/server.port`
-  (and pid) on start, removes on shutdown. `cc gui` reads this first; if
-  the port is alive, just open the browser tab instead of spawning a
-  duplicate server. Lockfile-style.
+## Known limitations
 
-## Architecture caveat (from review)
+Accepted up front; don't rediscover after refactoring.
 
-The clean/hexagonal layout described above is deliberately on the
-formal side. For a ~1k LoC personal tool this is mild over-engineering
-— acknowledged tax. The justification: there are genuinely 2
-`ClaudeRunner` implementations (exec for CLI, pty for server) and 2
-clients (CLI, web) over the same use cases, so ports do pay rent here.
-But: don't add a port speculatively for a single implementation. If a
-use-case is 10 lines, inline it at the caller rather than creating
-`core/usecase/foo.go` for ceremony's sake.
-
-## Phased plan
-
-Each phase is independently verifiable; no phase blocks CLI usage.
-
-**Phase 0 — Feasibility smoke test (do this before Phase 1).**
-Before touching any Go code, spend ~2 hours validating the load-bearing
-assumption: that `claude --resume` runs acceptably under a browser
-xterm.js + WS PTY bridge. Concretely:
-
-- Install `ttyd` (`brew install ttyd`).
-- Run `ttyd -p 7681 -W claude --resume <some-uuid>` and open the URL.
-- Use the session for 20–30 minutes: send messages, watch streaming
-  output, test scrollback, tool use, MCP if applicable, resize the
-  window, paste long text.
-- Watch for: alt-screen flicker, color mismatch, dropped input, render
-  lag on long streams, broken keybindings.
-
-**Exit criteria**: TUI renders correctly, input is responsive, no
-showstopper. Document any defects. If anything is a showstopper,
-*revisit v5 itself* before Phase 1 — refactoring 4 phases on top of a
-broken transport would be expensive.
-
-1. **Refactor Go to clean-arch layout.** Move `internal/sessions` →
-   `adapters/claudefs`, `internal/store` → `adapters/archivejson`,
-   extract use-cases into `core/usecase`. Add `flock`-wrapped RMW in
-   `archivejson`. CLI behavior identical.
-2. **Server skeleton + minimal HTML.** `c2-server` binary, list endpoint,
-   one HTML page (no framework) with xterm.js wired to WS PTY — proves
-   `claude --resume` runs cleanly inside a browser terminal end-to-end
-   in *our* server (not just ttyd). Includes scrollback ring buffer and
-   server.port discovery file.
-3. **React + Vite client.** Sidebar + tab bar + xterm panes against the
-   verified server. WS-per-tab, single-attach kick semantics.
-4. **PTY session manager.** Attach/detach polish, idle auto-shutdown,
-   explicit kill, "open in another tab" notice UX.
-
-## ID contract (between server and web client)
-
-REST and WS endpoints under `/api/sessions/:id/...` all address by
-the **c2-internal id** (8 hex chars). The pty manager keys live
-sessions by **ClaudeUUID** internally; the server resolves c2 id →
-ClaudeUUID inside `handleSessionPTY` before calling `manager.Attach`.
-
-The web client carries both ids per tab:
-- `claudeUuid` — dedup key for the in-memory term Map (one tab per
-  Claude session even if multiple c2 entries point at it).
-- `c2Id` — addressing key for the WS URL.
-
-Don't conflate the two. Phase 3 launched with the client sending
-claudeUuid in the URL by mistake; every WS open hit "entry not
-found" and surfaced as an immediate "Disconnected" overlay. The
-fix is in commit history; the lesson stays here.
+- **Image paste (Cmd+V) breaks.** xterm.js doesn't support OSC 1337 /
+  Kitty inline image upload. Drop unless we ship a custom
+  clipboard→base64 hack.
+- **Drag-drop file** breaks for the same reason.
+- **Terminal capability queries** (`\e[c`, `\e[6n`) — xterm.js
+  answers, but Claude may fall back to ASCII rendering in spots.
+  Cosmetic; accept.
+- **Auth re-login flow** — Claude prints an OAuth URL; in the
+  browser this is actually nicer (clickable) than in a native
+  terminal.
 
 ## Open questions deferred
 
-- Mobile/responsive layout — out of scope for v5.
-- Auth — local-only, no auth (loopback binding is the boundary).
-- Theming — defer; xterm.js defaults are fine for v5.
-- Search across sessions — current sidebar filter (substring on
-  title/cwd) is enough for v5; full-text JSONL search is later.
-- Image paste / drag-drop — deferred per "Known limitations" above.
-  Revisit only if Phase 0 reveals a clean workaround.
-- Idle-PTY warning UX — if a PTY sits idle for hours, should the UI
-  show a "session was idle, scrollback may be stale" hint on reattach?
-  Defer until real usage tells us if it matters.
+- Mobile / responsive beyond drawer mode.
+- Multi-machine LAN access (not a goal).
+- Theming presets (xterm defaults are fine for now).
+- Full-text JSONL search (sidebar substring filter is enough).
+- Image paste / drag-drop.
+- Idle-PTY warning UX on reattach.
+- URL-routed tabs so reload restores tabs (bigger than it looks).
+
+History of how we got here lives in `PLAN.md` (per-PR scope) and
+`UX-REVIEW*.md` (two independent reviews + combined).
