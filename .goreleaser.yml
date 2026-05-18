@@ -101,6 +101,24 @@ brews:
 
       The GUI server listens on 127.0.0.1:7755 by default. Override
       with C3_SERVER_PORT=N (or =0 for a random port).
+
+      Optional: run c3-server in the background via brew services so
+      `c3 gui` opens the browser instantly without spawning anything:
+
+        brew services start c3
+
+      (Service mode disables the idle auto-shutdown.)
+    # brew services integration. Goreleaser renders this as the
+    # formula's `service do ... end` block, which brew translates to a
+    # launchd plist on macOS / systemd unit on Linux.
+    service: |
+      run [opt_bin/"c3-server"]
+      keep_alive true
+      log_path var/"log/c3-server.log"
+      error_log_path var/"log/c3-server.log"
+      # Idle shutdown makes sense when c3 gui spawns the server on
+      # demand, but defeats the point of running as a service.
+      environment_variables C3_SERVER_IDLE_MINUTES: "0"
     test: |
       system "#{bin}/c3-bin", "--version"
       system "#{bin}/c3-server", "--version"
