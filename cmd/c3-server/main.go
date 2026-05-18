@@ -507,9 +507,13 @@ func handleSessionActivity(w http.ResponseWriter, r *http.Request, id string) {
 		return
 	}
 	snap := sess.Activity()
+	idleMs := sess.IdleMillis()
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(map[string]any{"buckets": snap[:]})
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"buckets": snap[:],
+		"idleMs":  idleMs,
+	})
 }
 
 // handleClaudeSessions returns the bind dialog's data set: unbound claude

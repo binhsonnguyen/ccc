@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { getOrCreateTerm } from '../lib/terminals';
-import { ptyWsURL } from '../lib/api';
+import { fetchActivity, ptyWsURL } from '../lib/api';
 import { useShortcut } from '../lib/shortcuts';
 import { stripAnsi } from '../lib/ansi';
 import { countMatches } from '../lib/mention';
@@ -21,6 +21,29 @@ interface Props {
   // active uuid through props — we also early-return below to skip the
   // decode entirely when this pane is visible).
   onMention: (uuid: string, delta: number) => void;
+}
+
+// Threshold beyond which we surface the "session idle" banner. 30 minutes
+// matches the design — claude has typically wrapped a task and is sitting
+// at its prompt by then. Kept as a module const (not a CSS var or env
+// knob) so the scope stays tight; bump here if user feedback wants it.
+const IDLE_THRESHOLD_MS = 30 * 60 * 1000;
+// How often we re-poll /activity for the idle counter. Matches the
+// sidebar's sparkline cadence — server caches nothing per-request, so
+// two clients polling at 2 s is fine.
+const IDLE_POLL_MS = 2000;
+
+// humanizeIdle renders a millisecond duration as a compact, English-only
+// "Xh Ym" / "Ym" / "Xs" string. Intentionally tiny — i18n is out of scope
+// for v5 and the banner has at most ~20 chars to play with.
+function humanizeIdle(ms: number): string {
+  const sec = Math.floor(ms / 1000);
+  if (sec < 60) return `${sec}s`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m`;
+  const hr = Math.floor(min / 60);
+  const remMin = min - hr * 60;
+  return remMin > 0 ? `${hr}h ${remMin}m` : `${hr}h`;
 }
 
 // One pane per open tab. We render *all* panes simultaneously and hide
@@ -245,6 +268,77 @@ export default function TerminalPane({
   const terminalDead = tab.status === 'kicked' || tab.status === 'exited';
   const transportProblem = tab.status === 'disconnected' || tab.status === 'error';
 
+  // ---- idle-PTY banner -------------------------------------------------
+  // Poll /activity (which already returns idleMs server-side, measured
+  // against the PTY's wall clock — no client-skew issues) and surface a
+  // non-blocking banner when claude has been quiet for >IDLE_THRESHOLD_MS.
+  // Per-tab state intentionally lives here (not lifted to App) so closing
+  // and reopening a tab gives a fresh slate.
+  const [idleMs, setIdleMs] = useState(0);
+  const [idleDismissed, setIdleDismissed] = useState(false);
+  const [sendDisabled, setSendDisabled] = useState(false);
+
+  useEffect(() => {
+    // Only poll while connected and only for sessions that already have
+    // a live PTY (uuid known). Pending/dead/transport-broken tabs have
+    // no idle signal to report.
+    if (tab.status !== 'connected') return;
+    let cancelled = false;
+    const tick = async () => {
+      if (document.hidden) return;
+      try {
+        const r = await fetchActivity(tab.c3Id);
+        if (cancelled) return;
+        if (!r) {
+          // No live PTY (server 204) — clear any stale state.
+          setIdleMs(0);
+          return;
+        }
+        setIdleMs((prev) => {
+          // Auto-reset the dismissed flag when fresh activity arrives:
+          // if we were above threshold and now we're well below it, the
+          // user's next idle stretch should be allowed to surface again.
+          if (prev >= IDLE_THRESHOLD_MS && r.idleMs < IDLE_THRESHOLD_MS) {
+            setIdleDismissed(false);
+          }
+          return r.idleMs;
+        });
+      } catch {
+        /* ignore poll failures — next tick will retry */
+      }
+    };
+    void tick();
+    const h = window.setInterval(() => void tick(), IDLE_POLL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(h);
+    };
+  }, [tab.status, tab.c3Id]);
+
+  const idleBannerVisible =
+    visible &&
+    tab.status === 'connected' &&
+    !terminalDead &&
+    !transportProblem &&
+    !idleDismissed &&
+    idleMs >= IDLE_THRESHOLD_MS;
+
+  const sendWake = useCallback(() => {
+    const entry = getOrCreateTerm(tab.claudeUuid);
+    const ws = entry.ws;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      // 0x0D = CR. Claude's prompt treats this as "submit empty line",
+      // which redraws and re-reads from stdin — exactly the "wake up"
+      // gesture the user would otherwise type by hand.
+      ws.send(new Uint8Array([0x0d]));
+    }
+    setIdleDismissed(true);
+    // Visual debounce so a frantic double-click doesn't spam multiple
+    // CRs visually (the byte is harmless either way).
+    setSendDisabled(true);
+    window.setTimeout(() => setSendDisabled(false), 1000);
+  }, [tab.claudeUuid]);
+
   // Autofocus the primary action when the terminal-dead overlay shows.
   // The inline banner does not trap focus by design.
   useEffect(() => {
@@ -305,6 +399,32 @@ export default function TerminalPane({
             aria-label="Dismiss and close tab"
           >
             Close
+          </button>
+        </div>
+      )}
+      {idleBannerVisible && (
+        <div
+          className="inline-banner banner-warn banner-idle"
+          role="status"
+          aria-live="polite"
+        >
+          <span className="banner-icon" aria-hidden="true">⏸</span>
+          <span className="banner-text">
+            Session idle for {humanizeIdle(idleMs)} — claude may be waiting for input.
+          </span>
+          <button
+            className="btn btn-sm primary"
+            onClick={sendWake}
+            disabled={sendDisabled}
+          >
+            Send Enter
+          </button>
+          <button
+            className="btn btn-sm"
+            onClick={() => setIdleDismissed(true)}
+            aria-label="Dismiss idle banner"
+          >
+            Dismiss
           </button>
         </div>
       )}

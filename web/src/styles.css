@@ -423,6 +423,14 @@ code {
 .banner-icon { font-size: 14px; }
 .banner-text { flex: 1; }
 
+/* Idle-PTY banner (reattach UX): inherits banner-warn colours but sits
+   slightly taller and pads buttons consistently. Non-blocking — terminal
+   below remains fully interactive. */
+.banner-idle {
+  min-height: 36px;
+}
+.banner-idle .btn { white-space: nowrap; }
+
 /* ---- overlays --------------------------------------------------------- */
 
 .overlay {

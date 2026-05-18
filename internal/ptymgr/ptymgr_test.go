@@ -705,6 +705,38 @@ func TestActivityRing_GapWipes(t *testing.T) {
 	}
 }
 
+// IdleMillis must reflect time since the most recent stdout read. We bump
+// lastActivity directly (same field the readLoop writes) and assert that
+// IdleMillis returns a small positive value.
+func TestSession_IdleMillis(t *testing.T) {
+	s := &Session{ring: newRing(1024)}
+	s.mu.Lock()
+	s.lastActivity = time.Now()
+	s.mu.Unlock()
+
+	// Immediately after, idle should be near zero (well under a second).
+	if got := s.IdleMillis(); got > 500 {
+		t.Fatalf("IdleMillis right after bump = %d, want < 500", got)
+	}
+
+	// Backdate lastActivity by ~250ms and verify IdleMillis catches up.
+	s.mu.Lock()
+	s.lastActivity = time.Now().Add(-250 * time.Millisecond)
+	s.mu.Unlock()
+	got := s.IdleMillis()
+	if got < 200 || got > 1000 {
+		t.Fatalf("IdleMillis after 250ms backdate = %d, want ~250", got)
+	}
+
+	// Zero lastActivity → 0 (treat as fresh, not "huge negative").
+	s.mu.Lock()
+	s.lastActivity = time.Time{}
+	s.mu.Unlock()
+	if got := s.IdleMillis(); got != 0 {
+		t.Fatalf("IdleMillis with zero lastActivity = %d, want 0", got)
+	}
+}
+
 // Session.Activity must be safe to call concurrently with a writer that
 // holds s.mu via record. Drives the snapshot reader and a write loop in
 // parallel and lets `go test -race` catch any UB.

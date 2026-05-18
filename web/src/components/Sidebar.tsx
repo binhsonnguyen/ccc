@@ -343,7 +343,11 @@ export default function Sidebar({
           const cached = getCachedActivity(s.id);
           if (cached !== undefined) return [s.id, cached] as const;
           try {
-            const b = await fetchActivity(s.id);
+            // fetchActivity now returns {buckets, idleMs}; sparkline
+            // only needs buckets. The idleMs companion is consumed by
+            // TerminalPane via its own poll (independent cadence).
+            const r = await fetchActivity(s.id);
+            const b = r ? r.buckets : null;
             setCachedActivity(s.id, b);
             return [s.id, b] as const;
           } catch {

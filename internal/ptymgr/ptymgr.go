@@ -84,9 +84,14 @@ type Session struct {
 	mu       sync.Mutex
 	ring     *ringBuffer
 	activity activityRing // 60-bucket × 1s ring of bytes/sec (C-1)
-	client   Client       // currently attached client, or nil
-	exited   bool
-	exitCode int
+	// lastActivity is the wall-clock time of the most recent PTY stdout
+	// read. Initialized at spawn (so a brand-new session reports time
+	// since spawn until claude prints anything). Read by IdleMillis(),
+	// written by the readLoop — both under s.mu (no separate lock).
+	lastActivity time.Time
+	client       Client // currently attached client, or nil
+	exited       bool
+	exitCode     int
 
 	// done closes when the reader goroutine has fully drained the PTY and
 	// the child has been reaped. Used by Manager to schedule GC.
@@ -387,11 +392,12 @@ func (m *Manager) Attach(key, cwd, claudeUUID string, c Client) (*Session, error
 			return nil, err
 		}
 		s = &Session{
-			Key:  key,
-			UUID: claudeUUID,
-			pty:  p,
-			ring: newRing(scrollbackSize),
-			done: make(chan struct{}),
+			Key:          key,
+			UUID:         claudeUUID,
+			pty:          p,
+			ring:         newRing(scrollbackSize),
+			done:         make(chan struct{}),
+			lastActivity: time.Now(),
 		}
 		// Pending session: spawn the discovery goroutine. Snapshot uuids
 		// present in claudefs for THIS cwd BEFORE we go to sleep so we
@@ -516,7 +522,9 @@ func (m *Manager) readLoop(s *Session) {
 			chunk := append([]byte(nil), buf[:n]...)
 			s.mu.Lock()
 			s.ring.write(chunk)
-			s.activity.record(time.Now(), n)
+			now := time.Now()
+			s.activity.record(now, n)
+			s.lastActivity = now
 			c := s.client
 			s.mu.Unlock()
 			if c != nil {
@@ -805,6 +813,23 @@ func (a *activityRing) snapshot(now time.Time) [60]uint32 {
 		out[p] = a.buckets[idx]
 	}
 	return out
+}
+
+// IdleMillis returns the number of milliseconds since the most recent
+// PTY stdout byte was read (or since spawn, if claude has produced
+// nothing yet). Lock-safe — same mu as the readLoop. Used by the
+// /activity endpoint to drive the "session idle" banner client-side.
+func (s *Session) IdleMillis() int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.lastActivity.IsZero() {
+		return 0
+	}
+	d := time.Since(s.lastActivity).Milliseconds()
+	if d < 0 {
+		return 0
+	}
+	return d
 }
 
 // Activity returns a lock-safe snapshot of the bytes/sec ring aligned

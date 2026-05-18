@@ -113,17 +113,30 @@ export async function fetchSessionTail(c3Id: string, bytes = 2048): Promise<stri
   return await r.text();
 }
 
-// fetchActivity returns the 60-bucket bytes/sec ring (oldest first) for a
-// live session, or null when no live PTY exists (server 204). The sidebar
-// polls this every ~2s for visible live rows to draw the sparkline.
-export async function fetchActivity(c3Id: string): Promise<number[] | null> {
+// ActivityResponse is the parsed shape of GET /api/sessions/:id/activity.
+// `buckets` is the 60-bucket bytes/sec ring (oldest first). `idleMs` is
+// milliseconds since the most recent PTY stdout read; the server measures
+// this so client-clock skew can't poison the value.
+export interface ActivityResponse {
+  buckets: number[];
+  idleMs: number;
+}
+
+// fetchActivity returns the activity ring + idle delta for a live session,
+// or null when no live PTY exists (server 204). The sidebar polls this
+// every ~2s for visible live rows to draw the sparkline; TerminalPane
+// reuses the same poll for the idle-banner threshold check.
+export async function fetchActivity(c3Id: string): Promise<ActivityResponse | null> {
   const r = await fetch(
     `/api/sessions/${encodeURIComponent(c3Id)}/activity`,
   );
   if (r.status === 204) return null;
   if (!r.ok) throw await readError(r);
-  const j = (await r.json()) as { buckets?: number[] };
-  return j?.buckets ?? null;
+  const j = (await r.json()) as { buckets?: number[]; idleMs?: number };
+  return {
+    buckets: j?.buckets ?? [],
+    idleMs: j?.idleMs ?? 0,
+  };
 }
 
 export function ptyWsURL(c3Id: string): string {
