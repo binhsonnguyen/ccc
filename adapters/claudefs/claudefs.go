@@ -107,11 +107,27 @@ func (r *Repo) ScanProject(cwd string) ([]core.Session, error) {
 	return out, nil
 }
 
-// encodeCWD mirrors Claude's project-dir naming: /, ., _ → -.
-// Empirically verified; keep in sync with Claude if it ever changes.
+// encodeCWD mirrors Claude's project-dir naming: any character not in
+// [A-Za-z0-9-] becomes `-`. Originally this only replaced /, ., _ but
+// that missed spaces (e.g. "Diablo 2"), which the discovery loop then
+// looked up under the wrong dir name and left the session stuck in
+// "pending" forever. Broadening to "everything not safe" is the safer
+// invariant — Claude is unlikely to ever keep a special char as-is in
+// a filesystem path on macOS/Linux.
 func encodeCWD(cwd string) string {
-	r := strings.NewReplacer("/", "-", ".", "-", "_", "-")
-	return r.Replace(cwd)
+	var b strings.Builder
+	b.Grow(len(cwd))
+	for _, r := range cwd {
+		if (r >= 'a' && r <= 'z') ||
+			(r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') ||
+			r == '-' {
+			b.WriteRune(r)
+			continue
+		}
+		b.WriteByte('-')
+	}
+	return b.String()
 }
 
 // Cwds returns deduped recent cwds across all Claude sessions, ordered by
