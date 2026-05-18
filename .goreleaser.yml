@@ -87,7 +87,11 @@ brews:
       bin.install "c3-bin"
       bin.install "c3-server"
       (etc/"c3").install "shell/c3.sh"
-      fish_function_path.install "shell/c3.fish"
+      # share/fish/vendor_functions.d resolves to fish's auto-load
+      # path under HOMEBREW_PREFIX. fish_function_path DSL is not in
+      # scope inside the per-arch define_method(:install) blocks
+      # goreleaser generates, so we hand-roll the path.
+      (share/"fish/vendor_functions.d").install "shell/c3.fish"
     caveats: |
       To enable the `c3` command in bash/zsh, add to your shell rc:
 
