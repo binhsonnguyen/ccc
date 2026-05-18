@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"c2/adapters/ptyrunner"
-	"c2/core"
+	"github.com/binhsonnguyen/ccc/adapters/ptyrunner"
+	"github.com/binhsonnguyen/ccc/core"
 
 	"github.com/creack/pty"
 )
@@ -404,14 +404,14 @@ func TestCounts_AttachAndDetach(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// D-7: pending-uuid sessions keyed by c2 id + discovery callback
+// D-7: pending-uuid sessions keyed by c3 id + discovery callback
 // ---------------------------------------------------------------------------
 
 // A pending Attach (claudeUUID == "") must:
 //   - spawn the PTY with empty uuid (no --resume),
-//   - register the session under the c2-id key,
+//   - register the session under the c3-id key,
 //   - report HasUUID(uuid)==false until the discovery loop links one.
-func TestAttach_PendingKeysByC2Id(t *testing.T) {
+func TestAttach_PendingKeysByC3Id(t *testing.T) {
 	skipIfNoPTY(t)
 	m := New()
 	// `cat` keeps the PTY alive without claude.
@@ -420,14 +420,14 @@ func TestAttach_PendingKeysByC2Id(t *testing.T) {
 	m.claudeScan = &fakeScanner{}
 
 	c := &fakeClient{}
-	sess, err := m.Attach("c2id-001", "/tmp", "", c)
+	sess, err := m.Attach("c3id-001", "/tmp", "", c)
 	if err != nil {
 		t.Fatalf("attach pending: %v", err)
 	}
 	t.Cleanup(func() { _ = sess.Kill() })
 
-	if sess.Key != "c2id-001" {
-		t.Errorf("Key = %q, want %q", sess.Key, "c2id-001")
+	if sess.Key != "c3id-001" {
+		t.Errorf("Key = %q, want %q", sess.Key, "c3id-001")
 	}
 	if sess.UUID != "" {
 		t.Errorf("UUID = %q, want empty for pending session", sess.UUID)
@@ -465,7 +465,7 @@ func TestDiscovery_FiresHookOnNewUUID(t *testing.T) {
 	})
 
 	c := &fakeClient{}
-	sess, err := m.Attach("c2id-002", "/tmp", "", c)
+	sess, err := m.Attach("c3id-002", "/tmp", "", c)
 	if err != nil {
 		t.Fatalf("attach: %v", err)
 	}
@@ -481,15 +481,15 @@ func TestDiscovery_FiresHookOnNewUUID(t *testing.T) {
 
 	select {
 	case ev := <-got:
-		if ev[0] != "c2id-002" || ev[1] != "newly-created" {
-			t.Errorf("hook fired with (%q, %q); want (c2id-002, newly-created)", ev[0], ev[1])
+		if ev[0] != "c3id-002" || ev[1] != "newly-created" {
+			t.Errorf("hook fired with (%q, %q); want (c3id-002, newly-created)", ev[0], ev[1])
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("discovery hook did not fire within 3s")
 	}
 
 	// After discovery, HasUUID should report true for the discovered uuid
-	// even though the manager-map key is still the c2 id.
+	// even though the manager-map key is still the c3 id.
 	if !m.HasUUID("newly-created") {
 		t.Error("HasUUID('newly-created') = false after discovery")
 	}
@@ -527,13 +527,13 @@ func TestDiscovery_TwoPendingSameCWD_OnlyOneClaims(t *testing.T) {
 	})
 
 	ca := &fakeClient{}
-	sa, err := m.Attach("c2id-A", "/tmp", "", ca)
+	sa, err := m.Attach("c3id-A", "/tmp", "", ca)
 	if err != nil {
 		t.Fatalf("attach A: %v", err)
 	}
 	t.Cleanup(func() { _ = sa.Kill() })
 	cb := &fakeClient{}
-	sb, err := m.Attach("c2id-B", "/tmp", "", cb)
+	sb, err := m.Attach("c3id-B", "/tmp", "", cb)
 	if err != nil {
 		t.Fatalf("attach B: %v", err)
 	}
@@ -567,8 +567,8 @@ func TestDiscovery_TwoPendingSameCWD_OnlyOneClaims(t *testing.T) {
 	if got[1] != "shared-new-uuid" {
 		t.Errorf("hook uuid = %q, want shared-new-uuid", got[1])
 	}
-	if got[0] != "c2id-A" && got[0] != "c2id-B" {
-		t.Errorf("hook key = %q, want c2id-A or c2id-B", got[0])
+	if got[0] != "c3id-A" && got[0] != "c3id-B" {
+		t.Errorf("hook key = %q, want c3id-A or c3id-B", got[0])
 	}
 }
 
@@ -581,7 +581,7 @@ func TestAttach_PendingSendsPendingFrame(t *testing.T) {
 	m.claudeScan = &fakeScanner{}
 
 	c := &fakeClient{}
-	sess, err := m.Attach("c2id-pending-frame", "/tmp", "", c)
+	sess, err := m.Attach("c3id-pending-frame", "/tmp", "", c)
 	if err != nil {
 		t.Fatalf("attach: %v", err)
 	}

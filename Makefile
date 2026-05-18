@@ -1,4 +1,4 @@
-# cc-terminal — top-level build targets.
+# ccc — top-level build targets.
 #
 # `make web` builds the Vite bundle into internal/webdev/assets/ so the
 # next `go build` embeds the new client. Run `make build` for both.
@@ -12,7 +12,7 @@ web:
 	cd web && npm install && npm run build
 
 server:
-	go build -o bin/c2-server ./cmd/c2-server
+	go build -o bin/c3-server ./cmd/c3-server
 
 build: web server
 

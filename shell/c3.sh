@@ -1,16 +1,16 @@
-# c2 — shell wrapper for c2-bin (works in bash and zsh)
+# c3 — shell wrapper for c3-bin (works in bash and zsh)
 #
-# A child process cannot cd or exec in its parent shell, so c2-bin emits
+# A child process cannot cd or exec in its parent shell, so c3-bin emits
 # the command as a string and this wrapper eval's it in the user's shell.
 # Source this file from ~/.bashrc or ~/.zshrc.
 
-c2() {
-  if ! command -v c2-bin >/dev/null 2>&1; then
-    echo "c2: c2-bin not found in PATH" >&2
+c3() {
+  if ! command -v c3-bin >/dev/null 2>&1; then
+    echo "c3: c3-bin not found in PATH" >&2
     return 127
   fi
   local cmd
-  cmd="$(command c2-bin "$@")"
+  cmd="$(command c3-bin "$@")"
   local rc=$?
   if [ $rc -ne 0 ]; then
     return $rc

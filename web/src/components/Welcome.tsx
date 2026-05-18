@@ -58,8 +58,8 @@ export default function Welcome({ onNewSession, onShowCheatsheet }: Props) {
     <div className="welcome" role="region" aria-label="Welcome">
       <div className="welcome-inner">
         <div className="welcome-brand">
-          <h1>cc</h1>
-          <p className="welcome-sub">claude code session manager</p>
+          <h1>ccc</h1>
+          <p className="welcome-sub">claude code companion</p>
         </div>
 
         <div className="welcome-cards">
@@ -90,10 +90,10 @@ export default function Welcome({ onNewSession, onShowCheatsheet }: Props) {
         </div>
 
         <div className="welcome-footer">
-          <span>cc-terminal</span>
+          <span>ccc</span>
           <span aria-hidden="true">·</span>
           <a
-            href="https://github.com/anthropics/cc-terminal"
+            href="https://github.com/binhsonnguyen/ccc"
             target="_blank"
             rel="noreferrer noopener"
           >

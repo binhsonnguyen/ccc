@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"c2/core"
+	"github.com/binhsonnguyen/ccc/core"
 )
 
 // memStore is an in-memory ArchiveStore for use-case tests. Mutate serializes
@@ -19,7 +19,7 @@ type memStore struct {
 	f  *core.ArchiveFile
 }
 
-func newMemStore(entries ...core.C2Entry) *memStore {
+func newMemStore(entries ...core.C3Entry) *memStore {
 	return &memStore{f: &core.ArchiveFile{Version: core.CurrentVersion, Sessions: entries}}
 }
 
@@ -27,7 +27,7 @@ func (m *memStore) Load() (*core.ArchiveFile, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	cp := *m.f
-	cp.Sessions = append([]core.C2Entry(nil), m.f.Sessions...)
+	cp.Sessions = append([]core.C3Entry(nil), m.f.Sessions...)
 	cp.Archived = append([]string(nil), m.f.Archived...)
 	return &cp, nil
 }
@@ -36,7 +36,7 @@ func (m *memStore) Save(f *core.ArchiveFile) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	cp := *f
-	cp.Sessions = append([]core.C2Entry(nil), f.Sessions...)
+	cp.Sessions = append([]core.C3Entry(nil), f.Sessions...)
 	cp.Archived = append([]string(nil), f.Archived...)
 	m.f = &cp
 	return nil
@@ -46,7 +46,7 @@ func (m *memStore) Mutate(fn func(*core.ArchiveFile) error) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	cp := *m.f
-	cp.Sessions = append([]core.C2Entry(nil), m.f.Sessions...)
+	cp.Sessions = append([]core.C3Entry(nil), m.f.Sessions...)
 	cp.Archived = append([]string(nil), m.f.Archived...)
 	if err := fn(&cp); err != nil {
 		return err
@@ -72,7 +72,7 @@ func (f *fakeSessionsView) KillKey(k string)      { f.killed = append(f.killed, 
 // ---------------------------------------------------------------------------
 
 func TestRename_HappyPath(t *testing.T) {
-	s := newMemStore(core.C2Entry{ID: "abc", Name: "old", CreatedAt: time.Now()})
+	s := newMemStore(core.C3Entry{ID: "abc", Name: "old", CreatedAt: time.Now()})
 	e, err := Rename(s, "abc", "new name")
 	if err != nil {
 		t.Fatalf("Rename: %v", err)
@@ -88,7 +88,7 @@ func TestRename_HappyPath(t *testing.T) {
 }
 
 func TestRename_EmptyName(t *testing.T) {
-	s := newMemStore(core.C2Entry{ID: "abc", Name: "old"})
+	s := newMemStore(core.C3Entry{ID: "abc", Name: "old"})
 	_, err := Rename(s, "abc", "")
 	if !errors.Is(err, ErrValidation) {
 		t.Errorf("err = %v, want ErrValidation", err)
@@ -96,7 +96,7 @@ func TestRename_EmptyName(t *testing.T) {
 }
 
 func TestRename_TooLong(t *testing.T) {
-	s := newMemStore(core.C2Entry{ID: "abc", Name: "old"})
+	s := newMemStore(core.C3Entry{ID: "abc", Name: "old"})
 	_, err := Rename(s, "abc", strings.Repeat("x", MaxNameLen+1))
 	if !errors.Is(err, ErrValidation) {
 		t.Errorf("err = %v, want ErrValidation", err)
@@ -116,7 +116,7 @@ func TestRename_NotFound(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRemove_HappyPath(t *testing.T) {
-	s := newMemStore(core.C2Entry{ID: "abc", Name: "x"})
+	s := newMemStore(core.C3Entry{ID: "abc", Name: "x"})
 	if err := Remove(s, "abc", false, &fakeSessionsView{live: map[string]bool{}}); err != nil {
 		t.Fatalf("Remove: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestRemove_NotFound(t *testing.T) {
 }
 
 func TestRemove_LivePTYWithoutForce(t *testing.T) {
-	s := newMemStore(core.C2Entry{ID: "abc", ClaudeUUID: "u-1"})
+	s := newMemStore(core.C3Entry{ID: "abc", ClaudeUUID: "u-1"})
 	v := &fakeSessionsView{live: map[string]bool{"u-1": true}}
 	err := Remove(s, "abc", false, v)
 	if !errors.Is(err, ErrPTYLive) {
@@ -148,12 +148,12 @@ func TestRemove_LivePTYWithoutForce(t *testing.T) {
 }
 
 func TestRemove_LivePTYWithForce(t *testing.T) {
-	s := newMemStore(core.C2Entry{ID: "abc", ClaudeUUID: "u-1"})
+	s := newMemStore(core.C3Entry{ID: "abc", ClaudeUUID: "u-1"})
 	v := &fakeSessionsView{live: map[string]bool{"u-1": true}}
 	if err := Remove(s, "abc", true, v); err != nil {
 		t.Fatalf("Remove: %v", err)
 	}
-	// Force kills via both KillUUID(uuid) + KillKey(c2id); the second
+	// Force kills via both KillUUID(uuid) + KillKey(c3id); the second
 	// is a defensive no-op-in-production but appears in the fake's
 	// killed list. Assert the uuid was at least one of them.
 	sawUUID := false
@@ -204,7 +204,7 @@ func TestNewEntry_RelativeCWD(t *testing.T) {
 
 func TestNewEntry_NonexistentCWD(t *testing.T) {
 	s := newMemStore()
-	_, err := NewEntry(s, "/tmp/this-does-not-exist-c2-test-9f8a", "")
+	_, err := NewEntry(s, "/tmp/this-does-not-exist-c3-test-9f8a", "")
 	if !errors.Is(err, ErrValidation) {
 		t.Errorf("err = %v, want ErrValidation", err)
 	}
@@ -240,7 +240,7 @@ func TestNewEntry_ExplicitName(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestBind_HappyPath(t *testing.T) {
-	s := newMemStore(core.C2Entry{ID: "abc"})
+	s := newMemStore(core.C3Entry{ID: "abc"})
 	e, err := Bind(s, "abc", "uuid-1")
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
@@ -260,8 +260,8 @@ func TestBind_NotFound(t *testing.T) {
 
 func TestBind_AlreadyBoundElsewhere(t *testing.T) {
 	s := newMemStore(
-		core.C2Entry{ID: "abc"},
-		core.C2Entry{ID: "def", ClaudeUUID: "uuid-1"},
+		core.C3Entry{ID: "abc"},
+		core.C3Entry{ID: "def", ClaudeUUID: "uuid-1"},
 	)
 	_, err := Bind(s, "abc", "uuid-1")
 	if !errors.Is(err, ErrAlreadyBound) {
@@ -270,7 +270,7 @@ func TestBind_AlreadyBoundElsewhere(t *testing.T) {
 }
 
 func TestBind_IdempotentOnSameEntry(t *testing.T) {
-	s := newMemStore(core.C2Entry{ID: "abc", ClaudeUUID: "uuid-1"})
+	s := newMemStore(core.C3Entry{ID: "abc", ClaudeUUID: "uuid-1"})
 	// Re-binding the same uuid to the same entry must not error — the
 	// discovery loop may fire twice for the same upgrade.
 	if _, err := Bind(s, "abc", "uuid-1"); err != nil {
@@ -279,7 +279,7 @@ func TestBind_IdempotentOnSameEntry(t *testing.T) {
 }
 
 func TestBind_EmptyUUID(t *testing.T) {
-	s := newMemStore(core.C2Entry{ID: "abc"})
+	s := newMemStore(core.C3Entry{ID: "abc"})
 	_, err := Bind(s, "abc", "")
 	if !errors.Is(err, ErrValidation) {
 		t.Errorf("err = %v, want ErrValidation", err)
@@ -288,7 +288,7 @@ func TestBind_EmptyUUID(t *testing.T) {
 
 // C4: rename trims whitespace; whitespace-only is rejected.
 func TestRename_WhitespaceOnly(t *testing.T) {
-	s := newMemStore(core.C2Entry{ID: "abc", Name: "old"})
+	s := newMemStore(core.C3Entry{ID: "abc", Name: "old"})
 	_, err := Rename(s, "abc", "   ")
 	if !errors.Is(err, ErrValidation) {
 		t.Errorf("err = %v, want ErrValidation", err)
@@ -296,7 +296,7 @@ func TestRename_WhitespaceOnly(t *testing.T) {
 }
 
 func TestRename_TrimsWhitespace(t *testing.T) {
-	s := newMemStore(core.C2Entry{ID: "abc", Name: "old"})
+	s := newMemStore(core.C3Entry{ID: "abc", Name: "old"})
 	e, err := Rename(s, "abc", "  spaced  ")
 	if err != nil {
 		t.Fatalf("Rename: %v", err)
@@ -308,7 +308,7 @@ func TestRename_TrimsWhitespace(t *testing.T) {
 
 // C4: rune-counted length, not byte length — 80 CJK runes is fine.
 func TestRename_UnicodeLength(t *testing.T) {
-	s := newMemStore(core.C2Entry{ID: "abc"})
+	s := newMemStore(core.C3Entry{ID: "abc"})
 	// 80 CJK runes = 240 bytes. Should succeed.
 	cjk := strings.Repeat("字", MaxNameLen)
 	if _, err := Rename(s, "abc", cjk); err != nil {
@@ -321,12 +321,12 @@ func TestRename_UnicodeLength(t *testing.T) {
 	}
 }
 
-// B3: a pending session (uuid empty, key = c2 id, live in manager) must
+// B3: a pending session (uuid empty, key = c3 id, live in manager) must
 // also gate Remove. Previously HasUUID("") returned false so the check
 // fell through and the entry was removed, orphaning the PTY.
 func TestRemove_LivePendingPTY(t *testing.T) {
-	s := newMemStore(core.C2Entry{ID: "pendid", ClaudeUUID: ""})
-	// "live" set keyed by c2 id (pending session). HasUUID will miss
+	s := newMemStore(core.C3Entry{ID: "pendid", ClaudeUUID: ""})
+	// "live" set keyed by c3 id (pending session). HasUUID will miss
 	// because uuid is empty; HasKey must catch it.
 	v := &fakeSessionsView{live: map[string]bool{"pendid": true}}
 	err := Remove(s, "pendid", false, v)
@@ -340,7 +340,7 @@ func TestRemove_LivePendingPTY(t *testing.T) {
 }
 
 func TestRemove_LivePendingPTYWithForce(t *testing.T) {
-	s := newMemStore(core.C2Entry{ID: "pendid"})
+	s := newMemStore(core.C3Entry{ID: "pendid"})
 	v := &fakeSessionsView{live: map[string]bool{"pendid": true}}
 	if err := Remove(s, "pendid", true, v); err != nil {
 		t.Fatalf("Remove force: %v", err)

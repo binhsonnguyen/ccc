@@ -65,7 +65,7 @@ export default function TerminalPane({
 
   // openWS is the canonical "(re)attach to this PTY" routine.
   const openWS = useCallback(
-    (uuid: string, c2Id: string) => {
+    (uuid: string, c3Id: string) => {
       const entry = getOrCreateTerm(uuid);
       if (entry.ws) {
         try {
@@ -77,7 +77,7 @@ export default function TerminalPane({
       }
       entry.term.reset();
 
-      const ws = new WebSocket(ptyWsURL(c2Id));
+      const ws = new WebSocket(ptyWsURL(c3Id));
       ws.binaryType = 'arraybuffer';
       entry.ws = ws;
       onStatus(uuid, 'connecting');
@@ -199,7 +199,7 @@ export default function TerminalPane({
 
     if (!wsBoundRef.current) {
       wsBoundRef.current = true;
-      openWS(tab.claudeUuid, tab.c2Id);
+      openWS(tab.claudeUuid, tab.c3Id);
     }
 
     return () => {
@@ -216,7 +216,7 @@ export default function TerminalPane({
       entry.ws = null;
       wsBoundRef.current = false;
     };
-  }, [tab.claudeUuid, tab.c2Id, openWS]);
+  }, [tab.claudeUuid, tab.c3Id, openWS]);
 
   useEffect(() => {
     if (!visible) return;
@@ -238,8 +238,8 @@ export default function TerminalPane({
   }, [visible, tab.claudeUuid]);
 
   const reconnect = useCallback(
-    () => openWS(tab.claudeUuid, tab.c2Id),
-    [openWS, tab.claudeUuid, tab.c2Id],
+    () => openWS(tab.claudeUuid, tab.c3Id),
+    [openWS, tab.claudeUuid, tab.c3Id],
   );
 
   const terminalDead = tab.status === 'kicked' || tab.status === 'exited';

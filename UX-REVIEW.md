@@ -1,4 +1,4 @@
-# cc-terminal — UX/UI Review (2026-05-14)
+# ccc — UX/UI Review (2026-05-14)
 
 A senior frontend designer review of the v5 web GUI. Reads `web/src/**`
 only — couldn't screenshot the running app, so all numbers/colors come
@@ -111,7 +111,7 @@ Use it to pick a few high-impact bets per cycle.
 | 15 | Border/divider system rebuild     | LOW    | ~30 min |
 
 Details for each are in the full review (saved alongside this file in
-the cc-terminal/UX-REVIEW-FULL.md if we ever paste the raw report).
+the ccc/UX-REVIEW-FULL.md if we ever paste the raw report).
 
 ---
 
@@ -137,7 +137,7 @@ Each item is tagged with its fit against the "thin wrapper" rule.
 7. **Transcript find / export** — `@xterm/addon-search`; export
    scrollback to .txt/.html (ANSI preserved). Fit: ✅.
 8. **Session metadata rail (Cmd+I)** — surface what we already know
-   from `C2Entry` + connection info. Don't scrape claude output.
+   from `C3Entry` + connection info. Don't scrape claude output.
    Fit: ⚠️ if we get tempted to parse claude state.
 9. **Shortcuts cheatsheet (Cmd+/ or `?`)** — 2-col grid, searchable.
    Maintain a single shortcuts registry. Fit: ✅.

@@ -3,12 +3,12 @@ package usecase
 import (
 	"fmt"
 
-	"c2/core"
+	"github.com/binhsonnguyen/ccc/core"
 )
 
-// Remove deletes a c2-session entry. Refuses (ErrPTYLive) if a live PTY
-// is attached either by ClaudeUUID (resumed-session path) or by c2 id
-// (pending-session path, where the PTY is keyed by c2 id because Claude
+// Remove deletes a c3-session entry. Refuses (ErrPTYLive) if a live PTY
+// is attached either by ClaudeUUID (resumed-session path) or by c3 id
+// (pending-session path, where the PTY is keyed by c3 id because Claude
 // hasn't written a JSONL yet). With force=true, kills both possibilities
 // before removing the entry — orphaning a pending PTY would leak a
 // `claude` process with no entry to reattach to.

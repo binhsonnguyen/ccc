@@ -1,4 +1,4 @@
-module c2
+module github.com/binhsonnguyen/ccc
 
 go 1.26.2
 

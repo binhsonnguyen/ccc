@@ -8,7 +8,7 @@ import {
   removeSession,
 } from '../lib/api';
 import { useShortcut } from '../lib/shortcuts';
-import type { C2Entry, ClaudeSession } from '../types';
+import type { C3Entry, ClaudeSession } from '../types';
 
 interface Props {
   // drawer: render in modal mode (centered, focus trap, backdrop). Used
@@ -18,7 +18,7 @@ interface Props {
   onCancel: () => void;
   // onCreated fires after a successful POST /api/sessions or after a
   // bind succeeds. Caller refreshes list and auto-opens a tab.
-  onCreated: (entry: C2Entry) => void;
+  onCreated: (entry: C3Entry) => void;
   showToast: (msg: string, opts?: { variant?: 'info' | 'error' | 'warning' | 'success' }) => void;
 }
 
@@ -324,7 +324,7 @@ export default function NewSessionForm({ drawer, onCancel, onCreated, showToast 
           {/* Manual uuid entry — for when the user knows the id (from
             * `claude` output, another machine, etc.) and doesn't want
             * to scroll. Resolves against `unbound` so we still have
-            * the cwd to create the c2 entry with. */}
+            * the cwd to create the c3 entry with. */}
           {(() => {
             const q = uuidQuery.trim().toLowerCase();
             const matches = q.length >= 8

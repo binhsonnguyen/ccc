@@ -1,9 +1,9 @@
 {
-  "name": "cc-terminal-web",
+  "name": "ccc-web",
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "description": "React + Vite + xterm.js client for c2-server (Phase 3).",
+  "description": "React + Vite + xterm.js client for c3-server (Phase 3).",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

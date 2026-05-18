@@ -13,19 +13,19 @@ import {
 } from '../lib/api';
 import { useShortcut } from '../lib/shortcuts';
 import { cwdMonogram, cwdTint, cwdTintFg } from '../lib/cwdTint';
-import type { C2Entry, Tab } from '../types';
+import type { C3Entry, Tab } from '../types';
 
 export type SidebarView = 'active' | 'archived';
 
 interface Props {
   // null = initial load in flight (Sidebar renders skeleton). [] = loaded
   // but empty. Array = loaded with entries.
-  sessions: C2Entry[] | null;
+  sessions: C3Entry[] | null;
   activeUuid: string | null;
   openTabs: Tab[];
   view: SidebarView;
   onViewChange: (v: SidebarView) => void;
-  onOpen: (entry: C2Entry) => void;
+  onOpen: (entry: C3Entry) => void;
   onRefresh: () => void;
   onSessionSelected?: () => void;
   // After mutating operations we ask App to refresh the list and maybe
@@ -70,7 +70,7 @@ interface PreviewState {
 }
 
 // Module-level cache so hover → leave → hover doesn't re-fetch within
-// 5 s. Keyed by c2 id; value is the raw text body the server returned
+// 5 s. Keyed by c3 id; value is the raw text body the server returned
 // (still containing ANSI — stripping happens in the component).
 const TAIL_TTL_MS = 5000;
 const tailCache = new Map<string, { text: string; at: number }>();
@@ -264,7 +264,7 @@ export default function Sidebar({
   // Show preview for a session row. Disabled for pending/non-live
   // entries — the server would 204 anyway, but skipping the fetch
   // keeps round-trips off the network.
-  const openPreviewFor = useCallback((s: C2Entry, el: HTMLElement) => {
+  const openPreviewFor = useCallback((s: C3Entry, el: HTMLElement) => {
     if (!s.claudeUuid || !s.live) return;
     const rect = el.getBoundingClientRect();
     const cached = getCachedTail(s.id);
@@ -287,7 +287,7 @@ export default function Sidebar({
   }, []);
 
   const onRowMouseEnter = useCallback(
-    (s: C2Entry, el: HTMLElement) => {
+    (s: C3Entry, el: HTMLElement) => {
       // Disable preview during rename / for pending rows.
       if (renamingId === s.id || !s.claudeUuid || !s.live) return;
       clearDismissTimer();
@@ -391,7 +391,7 @@ export default function Sidebar({
   // --- mutation helpers ---------------------------------------------------
 
   const doArchive = useCallback(
-    async (s: C2Entry) => {
+    async (s: C3Entry) => {
       try {
         const r = await archiveSession(s.id);
         showToast(r.archived ? `Archived ${s.name || s.id}` : `Unarchived ${s.name || s.id}`, {
@@ -407,7 +407,7 @@ export default function Sidebar({
   );
 
   const doRemove = useCallback(
-    async (s: C2Entry) => {
+    async (s: C3Entry) => {
       const wasLive = !!s.live;
       try {
         await removeSession(s.id, wasLive);
@@ -437,13 +437,13 @@ export default function Sidebar({
     [onAfterMutate, onCloseTabFor, showToast],
   );
 
-  const startRename = useCallback((s: C2Entry) => {
+  const startRename = useCallback((s: C3Entry) => {
     setRenamingId(s.id);
     setRenameDraft(s.name || '');
   }, []);
 
   const commitRename = useCallback(
-    async (s: C2Entry) => {
+    async (s: C3Entry) => {
       const next = renameDraft.trim();
       setRenamingId(null);
       if (renameCancelledRef.current) {
@@ -466,7 +466,7 @@ export default function Sidebar({
   // --- menu construction --------------------------------------------------
 
   const buildMenu = useCallback(
-    (s: C2Entry): MenuItem[] => {
+    (s: C3Entry): MenuItem[] => {
       const isOpen = !!s.claudeUuid && openSet.has(s.claudeUuid);
       const pending = !s.claudeUuid;
       const archived = view === 'archived';
@@ -574,7 +574,7 @@ export default function Sidebar({
   // The handler reads the focused row's id from data-row-id and looks
   // up the entry by id — the registry is one set per Sidebar instance,
   // not per row.
-  const focusedRowEntry = (): C2Entry | null => {
+  const focusedRowEntry = (): C3Entry | null => {
     const el = document.activeElement;
     if (!el) return null;
     const li = el.closest<HTMLElement>('li.session[data-row-id]');
@@ -613,7 +613,7 @@ export default function Sidebar({
   );
   // Delete / Backspace open the row menu in danger-armed state — the
   // user picks Remove and confirms there (avoids a parallel confirm UI).
-  const openRowMenuAtRow = (s: C2Entry) => {
+  const openRowMenuAtRow = (s: C3Entry) => {
     const el = rowRefs.current.get(s.id);
     if (!el) return;
     const rect = el.getBoundingClientRect();

@@ -3,14 +3,14 @@
 // The pattern is read once at module load from localStorage. Power
 // users can edit it via DevTools:
 //
-//   localStorage['cc-terminal:mention-regex'] = '\\bclaude:\\s'
+//   localStorage['c3:mention-regex'] = '\\bclaude:\\s'
 //
 // then reload. We do not surface UI for this yet — by design, this
 // feature is a "you know you want it" power-tool, not a default
 // surface. Invalid patterns silently fall back to DEFAULT (no toast,
 // no console error — the badge is decorative; failing loud would be
 // noisier than the feature is worth).
-const LS_KEY = 'cc-terminal:mention-regex';
+const LS_KEY = 'c3:mention-regex';
 const DEFAULT = 'Error|TODO|FIXME';
 
 function compile(source: string): RegExp {

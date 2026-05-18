@@ -1,8 +1,8 @@
-// Package ptymgr owns the lifecycle of live PTYs in the c2-server.
+// Package ptymgr owns the lifecycle of live PTYs in the c3-server.
 //
 // One PTY per "session key" (tmux-style identity). The key is normally a
 // Claude session UUID, but for brand-new sessions that haven't been
-// assigned a uuid yet, it's the c2-internal id instead. A discovery loop
+// assigned a uuid yet, it's the c3-internal id instead. A discovery loop
 // watches claudefs for new uuids in the session's cwd and fires the
 // OnUUIDDiscovered hook so the server can PATCH the entry. Opening a
 // session that already has a live PTY attaches to it rather than spawning
@@ -19,9 +19,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"c2/adapters/claudefs"
-	"c2/adapters/ptyrunner"
-	"c2/core"
+	"github.com/binhsonnguyen/ccc/adapters/claudefs"
+	"github.com/binhsonnguyen/ccc/adapters/ptyrunner"
+	"github.com/binhsonnguyen/ccc/core"
 )
 
 // scrollbackSize is the per-PTY ring buffer cap (~2 MB raw bytes). Replay
@@ -71,10 +71,10 @@ type Client interface {
 
 // Session is one live PTY + its scrollback + currently-attached client.
 //
-// Key is the manager-map key (claude uuid OR c2 id while pending). UUID
+// Key is the manager-map key (claude uuid OR c3 id while pending). UUID
 // is the claude uuid (empty while pending). After discovery fires, UUID
 // gets filled in but Key stays as-is — re-keying mid-flight is more
-// trouble than it's worth and the server's lookup goes through c2 id
+// trouble than it's worth and the server's lookup goes through c3 id
 // anyway.
 type Session struct {
 	Key  string
@@ -111,7 +111,7 @@ type scanner interface {
 }
 
 // Manager is the registry of live PTY sessions, keyed by session key
-// (claude uuid OR c2 id). Safe for concurrent use.
+// (claude uuid OR c3 id). Safe for concurrent use.
 type Manager struct {
 	mu       sync.Mutex
 	sessions map[string]*Session
@@ -132,7 +132,7 @@ type Manager struct {
 
 	// onUUIDDiscovered, if set, fires when the discovery loop links a
 	// pending session to a freshly-written Claude JSONL. Called with the
-	// session key (= c2 id while pending) and the discovered uuid. The
+	// session key (= c3 id while pending) and the discovered uuid. The
 	// server uses it to PATCH the entry via usecase.Bind.
 	onUUIDDiscovered func(sessionKey, newUUID string)
 
@@ -213,7 +213,7 @@ func (m *Manager) HasUUID(uuid string) bool {
 	for _, s := range m.sessions {
 		// Match either current key (covers the resumed case where key =
 		// uuid from the start) or upgraded UUID (covers pending sessions
-		// after discovery filled in the uuid but kept the c2-id key).
+		// after discovery filled in the uuid but kept the c3-id key).
 		if s.Key == uuid || s.UUID == uuid {
 			return true
 		}
@@ -241,7 +241,7 @@ func (m *Manager) KillUUID(uuid string) {
 }
 
 // HasKey reports whether a session is registered under the given manager
-// key (c2 id for pending sessions, uuid otherwise). Use-cases gate
+// key (c3 id for pending sessions, uuid otherwise). Use-cases gate
 // pending-session removal on this — a pending PTY has no uuid yet so
 // HasUUID can't see it.
 func (m *Manager) HasKey(key string) bool {
@@ -255,7 +255,7 @@ func (m *Manager) HasKey(key string) bool {
 }
 
 // GetSession returns the live Session keyed by `key` (claude uuid OR
-// c2 id for pending sessions), or nil if absent. Read-only accessor —
+// c3 id for pending sessions), or nil if absent. Read-only accessor —
 // callers must not mutate the session, only call its public methods.
 func (m *Manager) GetSession(key string) *Session {
 	if key == "" {

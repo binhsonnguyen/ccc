@@ -1,7 +1,7 @@
 // Package picker shells out to fzf to let the user select a session.
 //
 // Two pickers:
-//   - PickC2: over user's curated c2-sessions. Hotkeys: enter / ctrl-n / ctrl-b / ctrl-a.
+//   - PickC3: over user's curated c3-sessions. Hotkeys: enter / ctrl-n / ctrl-b / ctrl-a.
 //   - PickClaude: over all Claude raw sessions, used by the bind flow.
 package picker
 
@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"c2/core"
+	"github.com/binhsonnguyen/ccc/core"
 )
 
 var (
@@ -22,7 +22,7 @@ var (
 	ErrFzfMissing = errors.New("fzf not installed; run `brew install fzf`")
 )
 
-// Action is what the user did in the c2 picker.
+// Action is what the user did in the c3 picker.
 type Action int
 
 const (
@@ -31,21 +31,21 @@ const (
 	ActionBind                 // user pressed Ctrl-B
 )
 
-// C2Result is what PickC2 returns.
-type C2Result struct {
+// C3Result is what PickC3 returns.
+type C3Result struct {
 	Action Action
-	Entry  *core.C2Entry // populated when Action == ActionResume
+	Entry  *core.C3Entry // populated when Action == ActionResume
 }
 
-// PickC2 shows the c2-session picker and returns what the user did.
+// PickC3 shows the c3-session picker and returns what the user did.
 // `entries` are already filtered (active vs archived) by the caller.
-func PickC2(entries []core.C2Entry, opts Options) (*C2Result, error) {
+func PickC3(entries []core.C3Entry, opts Options) (*C3Result, error) {
 	if err := requireFzf(); err != nil {
 		return nil, err
 	}
 
-	rows := FormatC2Rows(entries)
-	idx := map[string]*core.C2Entry{}
+	rows := FormatC3Rows(entries)
+	idx := map[string]*core.C3Entry{}
 	for i := range entries {
 		idx[entries[i].ID] = &entries[i]
 	}
@@ -61,7 +61,7 @@ func PickC2(entries []core.C2Entry, opts Options) (*C2Result, error) {
 	if opts.ArchivedView {
 		viewFlag = " --archived-view"
 	}
-	reloadCmd := fmt.Sprintf("c2-bin --picker-action archive%s {1}", viewFlag)
+	reloadCmd := fmt.Sprintf("c3-bin --picker-action archive%s {1}", viewFlag)
 	args = append(args,
 		"--header="+header,
 		"--expect=ctrl-n,ctrl-b",
@@ -82,9 +82,9 @@ func PickC2(entries []core.C2Entry, opts Options) (*C2Result, error) {
 
 	switch key {
 	case "ctrl-n":
-		return &C2Result{Action: ActionNew}, nil
+		return &C3Result{Action: ActionNew}, nil
 	case "ctrl-b":
-		return &C2Result{Action: ActionBind}, nil
+		return &C3Result{Action: ActionBind}, nil
 	}
 
 	// Resume case
@@ -96,13 +96,13 @@ func PickC2(entries []core.C2Entry, opts Options) (*C2Result, error) {
 	if !ok {
 		return nil, fmt.Errorf("picked unknown id %q", id)
 	}
-	return &C2Result{Action: ActionResume, Entry: e}, nil
+	return &C3Result{Action: ActionResume, Entry: e}, nil
 }
 
 // DirCandidate is one row offered to the user when picking a directory.
 type DirCandidate struct {
 	Path  string
-	Label string // shown in the picker; describes the source ("[PWD]", "[c2]", "[claude]")
+	Label string // shown in the picker; describes the source ("[PWD]", "[c3]", "[claude]")
 }
 
 // PickDir shows a directory picker over the given candidates. The first
@@ -190,7 +190,7 @@ func baseFzfArgs(opts Options) []string {
 		"--delimiter=\t",
 		"--height=80%",
 		"--reverse",
-		"--prompt=c2> ",
+		"--prompt=c3> ",
 	}
 	if opts.Query != "" {
 		args = append(args, "--query="+opts.Query)
@@ -239,9 +239,9 @@ func runFzf(args []string, stdin string) (selected, key string, err error) {
 	return "", "", ErrCancelled
 }
 
-// FormatC2Rows formats entries for fzf input. Exported so the
+// FormatC3Rows formats entries for fzf input. Exported so the
 // --picker-action callback can re-emit the same format on reload.
-func FormatC2Rows(entries []core.C2Entry) []string {
+func FormatC3Rows(entries []core.C3Entry) []string {
 	rows := make([]string, 0, len(entries))
 	now := time.Now()
 	for _, e := range entries {

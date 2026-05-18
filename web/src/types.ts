@@ -1,7 +1,7 @@
-// Mirrors core.C2Entry shape returned by GET /api/sessions.
+// Mirrors core.C3Entry shape returned by GET /api/sessions.
 // We don't import the Go type; keep this file in sync manually if the
 // server schema changes.
-export interface C2Entry {
+export interface C3Entry {
   id: string;
   name: string;
   cwd: string;
@@ -9,7 +9,7 @@ export interface C2Entry {
   createdAt: string;
   // live: present only when GET /api/sessions?include=live was requested.
   // True iff the ptymgr currently has an attached PTY for this entry's
-  // claudeUuid (or pending c2-id while uuid is still empty).
+  // claudeUuid (or pending c3-id while uuid is still empty).
   live?: boolean;
 }
 
@@ -53,13 +53,13 @@ export type TabStatus =
 
 export interface Tab {
   // claudeUuid: dedup key (one tab per Claude session even if multiple
-  // c2 entries point at it). For pending entries the c2 id is reused
+  // c3 entries point at it). For pending entries the c3 id is reused
   // here as a placeholder until the server upgrades the entry — the
   // sidebar refresh after `ready` swaps the tab over.
   claudeUuid: string;
-  // c2Id: addressing key for /api/sessions/:id/pty WS route. The server
-  // resolves entry by c2 id and looks up its claudeUuid internally.
-  c2Id: string;
+  // c3Id: addressing key for /api/sessions/:id/pty WS route. The server
+  // resolves entry by c3 id and looks up its claudeUuid internally.
+  c3Id: string;
   name: string;
   cwd: string;
   status: TabStatus;

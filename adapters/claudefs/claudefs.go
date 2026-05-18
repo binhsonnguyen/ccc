@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"c2/core"
+	"github.com/binhsonnguyen/ccc/core"
 )
 
 type Repo struct{}
@@ -57,7 +57,7 @@ func (r *Repo) Scan() ([]core.Session, error) {
 		projectDir := filepath.Join(root, d.Name())
 		ss, err := scanProject(projectDir)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "c2: skip %s: %v\n", d.Name(), err)
+			fmt.Fprintf(os.Stderr, "c3: skip %s: %v\n", d.Name(), err)
 			continue
 		}
 		sessions = append(sessions, ss...)
@@ -153,7 +153,7 @@ func scanProject(dir string) ([]core.Session, error) {
 	if idx, err := loadIndex(indexPath); err == nil {
 		return sessionsFromIndex(idx, indexPath, dir), nil
 	} else if !errors.Is(err, fs.ErrNotExist) {
-		fmt.Fprintf(os.Stderr, "c2: malformed %s: %v\n", indexPath, err)
+		fmt.Fprintf(os.Stderr, "c3: malformed %s: %v\n", indexPath, err)
 	}
 	return sessionsFromJSONL(dir)
 }
@@ -185,7 +185,7 @@ func sessionsFromIndex(idx *indexFile, indexPath, dir string) []core.Session {
 			cwd = lastCWDFromJSONL(jsonlPath)
 		}
 		if cwd == "" {
-			fmt.Fprintf(os.Stderr, "c2: skip %s: cannot resolve cwd\n", e.SessionID)
+			fmt.Fprintf(os.Stderr, "c3: skip %s: cannot resolve cwd\n", e.SessionID)
 			continue
 		}
 		modified := parseTime(e.Modified)
@@ -224,7 +224,7 @@ func sessionsFromJSONL(dir string) ([]core.Session, error) {
 		uuid := strings.TrimSuffix(e.Name(), ".jsonl")
 		cwd, summary := scanJSONL(jsonlPath)
 		if cwd == "" {
-			fmt.Fprintf(os.Stderr, "c2: skip %s: no cwd in jsonl\n", uuid)
+			fmt.Fprintf(os.Stderr, "c3: skip %s: no cwd in jsonl\n", uuid)
 			continue
 		}
 		info, err := e.Info()

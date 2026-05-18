@@ -1,4 +1,4 @@
-# cc — GUI Design (v5)
+# c3 — GUI Design (v5)
 
 v4.1 (CLI resumer, see `DESIGN.md`) stays as-is. v5 adds a web GUI as
 a **thin wrapper** around `claude --resume`, not a replacement. This
@@ -15,9 +15,9 @@ changes; the per-PR scope and history live in `PLAN.md`.
 Concrete consequences of "thin":
 
 - **No parallel data store.** Sessions, messages, history all live in
-  Claude Code's own `~/.claude/projects/**/*.jsonl`. cc reads, never
-  owns. The only cc-owned file is `archived.json` (visibility flags
-  + names for c2 entries — not chat data).
+  Claude Code's own `~/.claude/projects/**/*.jsonl`. c3 reads, never
+  owns. The only c3-owned file is `archived.json` (visibility flags
+  + names for c3 entries — not chat data).
 - **No reimplementation of the chat loop.** Anthropic SDK / Agent SDK
   are ruled out — they would replace `claude`'s tool-use, MCP, hooks,
   and create a fork of the data model.
@@ -27,7 +27,7 @@ Concrete consequences of "thin":
 
 ## Allowed server state
 
-cc-server may keep transient, in-memory state *derived* from the PTY
+c3-server may keep transient, in-memory state *derived* from the PTY
 stream:
 
 - Per-PTY scrollback ring buffer (~2 MB) — feeds reattach replay and
@@ -86,15 +86,15 @@ adapters/
 internal/
   picker/                        -- fzf wrapper for the CLI
   ptymgr/                        -- live PTY map keyed by session key (uuid when
-                                    bound, c2 id while pending); scrollback ring,
+                                    bound, c3 id while pending); scrollback ring,
                                     activity ring, single-attach kick,
                                     discovery loop for pending uuids
   webdev/                        -- go:embed of the built web/ bundle
 
 cmd/
-  c2-bin/                        -- CLI; calls core in-process and exec's claude.
-                                    `c2 gui` spawns c2-server detached.
-  c2-server/                     -- HTTP+WS on 127.0.0.1; serves embedded SPA.
+  c3-bin/                        -- CLI; calls core in-process and exec's claude.
+                                    `c3 gui` spawns c3-server detached.
+  c3-server/                     -- HTTP+WS on 127.0.0.1; serves embedded SPA.
 
 web/                             -- React 18 + Vite + TypeScript + xterm.js
                                     + vanilla CSS. Built to internal/webdev/assets.
@@ -125,11 +125,11 @@ CSRF check; the rest are GET-only.
 | `/assets/*`, `/` | GET | static React bundle (embedded) |
 
 **ID contract (load-bearing).** Every `/api/sessions/:id/...` route
-addresses by the **c2-internal id** (8 hex chars). The pty manager
-keys live sessions by their session key — claudeUuid when bound, c2
+addresses by the **c3-internal id** (8 hex chars). The pty manager
+keys live sessions by their session key — claudeUuid when bound, c3
 id while pending — and `handleSessionPTY` resolves the mapping
 internally. The web client tracks both: `claudeUuid` (dedup key for
-the in-memory xterm Map) and `c2Id` (URL addressing key). Don't
+the in-memory xterm Map) and `c3Id` (URL addressing key). Don't
 conflate them; PR 2 launched with the client sending claudeUuid in
 the URL and every WS open 404'd — the fix is in commit history but
 the lesson stays here.
@@ -140,18 +140,18 @@ binary = stdout; text JSON `{type:"pending"|"ready"|"kicked"|"exit"|"error"}`.
 
 ## Server lifecycle
 
-- `c2 gui` (CLI subcommand) spawns c2-server detached and opens the
+- `c3 gui` (CLI subcommand) spawns c3-server detached and opens the
   browser. Re-running finds the live server via the discovery file
   and just opens the browser — no duplicate.
 - **Default port 7755** (fixed for bookmark-ability). Override:
-  `C2_SERVER_PORT=NNNN` or `=0` for a random OS-assigned port.
+  `C3_SERVER_PORT=NNNN` or `=0` for a random OS-assigned port.
 - Strict loopback bind. Same-origin Origin check on mutating REST
   and on WS `Accept`. No LAN access; not a goal.
-- **Idle auto-shutdown** after `C2_SERVER_IDLE_MINUTES` (default 15)
+- **Idle auto-shutdown** after `C3_SERVER_IDLE_MINUTES` (default 15)
   of zero live PTYs *and* zero attached clients. Set to 0 to
   disable. A generation counter in the manager closes the race
   between the watcher's decision and a fresh attach.
-- Discovery file: `~/.local/share/cc/server.port` records port + pid
+- Discovery file: `~/.local/share/c3/server.port` records port + pid
   on start and is removed on graceful shutdown (and on panic via a
   recover hook). Stale entries are detected via `kill -0` so a
   crashed previous run doesn't block startup.

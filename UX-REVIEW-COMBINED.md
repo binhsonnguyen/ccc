@@ -1,4 +1,4 @@
-# cc-terminal — UX Review combined (R1 + R2)
+# ccc — UX Review combined (R1 + R2)
 
 Two independent senior-designer reviews. R1 (`UX-REVIEW.md`) was
 code-only — strong on design tokens and information architecture. R2

@@ -1,6 +1,6 @@
-# cc — Design (v4.1, MVP-focused)
+# c3 — Design (v4.1, MVP-focused)
 
-A single CLI command `cc` that lets you resume any past Claude Code session
+A single CLI command `c3` that lets you resume any past Claude Code session
 from any directory. No PTY hosting, no session abstraction layer, no tmux
 dependency. Just: list → pick → `cd && exec claude --resume`.
 
@@ -22,30 +22,30 @@ dependency. Just: list → pick → `cd && exec claude --resume`.
 
 ---
 
-## 1. What `cc` does
+## 1. What `c3` does
 
 ```
-$ cc                       # picker (global, active sessions only)
-$ cc tap                   # picker pre-filtered by "tap" — never auto-resumes
-$ cc -1 tap                # auto-resume IF exactly one session matches
-$ cc here                  # picker, scoped to sessions in $PWD
-                           #   (NOT `cc -h` — `-h` is reserved for help)
-$ cc n                     # spawn fresh claude in $PWD (new session)
-$ cc -a                    # picker, archived sessions only
-$ cc archive <uuid|last>   # hide a session from default picker
-$ cc unarchive <uuid>      # bring it back
-$ cc --help
+$ c3                       # picker (global, active sessions only)
+$ c3 tap                   # picker pre-filtered by "tap" — never auto-resumes
+$ c3 -1 tap                # auto-resume IF exactly one session matches
+$ c3 here                  # picker, scoped to sessions in $PWD
+                           #   (NOT `c3 -h` — `-h` is reserved for help)
+$ c3 n                     # spawn fresh claude in $PWD (new session)
+$ c3 -a                    # picker, archived sessions only
+$ c3 archive <uuid|last>   # hide a session from default picker
+$ c3 unarchive <uuid>      # bring it back
+$ c3 --help
 ```
 
-`cc <query>` opens the picker pre-filtered. It does **not** auto-resume on
+`c3 <query>` opens the picker pre-filtered. It does **not** auto-resume on
 single-match — surprise execution is worse than one extra Enter. Use
-`cc -1 <query>` when you want auto-resume-if-unique.
+`c3 -1 <query>` when you want auto-resume-if-unique.
 
 That's the entire surface for v1.
 
 ### Picker hotkeys
 
-| Key       | In default view (`cc`)         | In archived view (`cc -a`)        |
+| Key       | In default view (`c3`)         | In archived view (`c3 -a`)        |
 | --------- | ------------------------------ | --------------------------------- |
 | `Enter`   | resume highlighted session     | resume highlighted session        |
 | `Ctrl-A`  | **archive** highlighted        | **unarchive** (restore) highlighted |
@@ -54,20 +54,20 @@ That's the entire surface for v1.
 
 After archive/unarchive, the picker re-renders the (now updated) list in
 place — user keeps browsing without losing context. Implemented via fzf
-`--bind` with `reload(...)` actions calling back into `cc-bin --picker-action archive {1}`
+`--bind` with `reload(...)` actions calling back into `c3-bin --picker-action archive {1}`
 where `{1}` is the uuid column. **`--picker-action` must (a) mutate
 `archived.json` synchronously, then (b) emit the full updated session list
 to stdout** — fzf's `reload` consumes that stdout to repopulate the list.
 
-Archive scope: cc-only. Claude Code's own files are never modified;
+Archive scope: c3-only. Claude Code's own files are never modified;
 `claude --resume <uuid>` of an archived session still works normally if
-invoked directly. Archive purely controls cc's picker visibility.
+invoked directly. Archive purely controls c3's picker visibility.
 
 ### Picker UX
 
 ```
-$ cc
-┌─ cc ──────────────────────────────────── 12 sessions ───┐
+$ c3
+┌─ c3 ──────────────────────────────────── 12 sessions ───┐
 │ /  search…                                              │
 │                                                         │
 │ ▸ pulsar-mettronome  · main    · 2h ago                │
@@ -91,9 +91,9 @@ $ cc
 ### Resumability after cancel
 
 If the user Ctrl+C / `/quit` / closes the terminal mid-conversation, Claude
-Code preserves the partial JSONL automatically. `cc` will surface it again
+Code preserves the partial JSONL automatically. `c3` will surface it again
 next time (it's the same UUID, same file, just a newer mtime). **No work
-required from cc** — verified during M1 implementation.
+required from c3** — verified during M1 implementation.
 
 ---
 
@@ -129,14 +129,14 @@ sessions:
 
 If all four fail, skip the session with a warning (don't guess).
 
-Read-only. `cc` never writes to `~/.claude/`.
+Read-only. `c3` never writes to `~/.claude/`.
 
 ### Archive sidecar
 
-The only state `cc` writes is a tiny JSON file:
+The only state `c3` writes is a tiny JSON file:
 
 ```
-~/.local/share/cc/archived.json
+~/.local/share/c3/archived.json
 ```
 
 ```json
@@ -144,11 +144,11 @@ The only state `cc` writes is a tiny JSON file:
 ```
 
 A flat list of UUIDs the user has chosen to hide. Default picker filters
-these out; `cc -a` shows only them; `cc unarchive <uuid>` removes from
+these out; `c3 -a` shows only them; `c3 unarchive <uuid>` removes from
 list. Atomic write via `.tmp` + rename. No locking needed (single-user,
 short-lived writes, last-writer-wins is fine for a hide-list).
 
-If the file is missing or corrupt, `cc` treats it as empty and continues.
+If the file is missing or corrupt, `c3` treats it as empty and continues.
 No abstraction over Claude sessions — just a hide-list keyed by their
 existing UUIDs.
 
@@ -168,7 +168,7 @@ when Claude exits, the shell prompt resumes in the new directory.
 ```
                  ┌─────────────────┐
    user types    │                 │      reads
-   `cc`     ──▶  │   cc binary     │ ───────────▶  ~/.claude/projects/
+   `c3`     ──▶  │   c3 binary     │ ───────────▶  ~/.claude/projects/
                  │   (Go, ~300 LoC)│                  *.json + *.jsonl
                  │                 │                  (read-only)
                  └────────┬────────┘
@@ -179,7 +179,7 @@ when Claude exits, the shell prompt resumes in the new directory.
                  └────────┬────────┘
                           │ user picks
                           ▼
-                 cc prints `cd && exec claude --resume <uuid>`
+                 c3 prints `cd && exec claude --resume <uuid>`
                           │
                           ▼
                  shell wrapper evals it (see §5)
@@ -192,37 +192,37 @@ prints a command, exits.
 
 ## 4. Sequence
 
-### `cc` (default)
+### `c3` (default)
 
 1. `os.UserHomeDir()` → walk `~/.claude/projects/*/`.
 2. For each project folder: load `sessions-index.json` if present; else list
    `*.jsonl` and synthesize entries (parse first user line for summary).
 3. Sort by `modified` (or `mtime`) descending.
 4. Format rows: `<uuid>\t<display-text>` (uuid hidden, display visible).
-5. Pipe to `fzf --with-nth=2.. --preview '<cc internal preview cmd> {1}'`.
+5. Pipe to `fzf --with-nth=2.. --preview '<c3 internal preview cmd> {1}'`.
 6. On selection: emit `cd <cwd> && exec claude --resume <uuid>` to stdout.
 7. Shell wrapper `eval`s it (see §5).
 
-### `cc <query>`
+### `c3 <query>`
 
 Same as default, but pass `--query=<query>` to fzf (pre-filter). Picker still
 opens; user confirms with Enter. **No `--select-1`** — surprise auto-exec is
 bad UX.
 
-### `cc -1 <query>`
+### `c3 -1 <query>`
 
 Use `fzf --filter=<query> --exit-0`. If exactly one match, emit the resume
 command directly (skip picker). If zero matches, exit non-zero. If many,
 fall back to opening picker pre-filtered.
 
-### `cc here`
+### `c3 here`
 
 Step 2 filters to sessions whose resolved cwd equals `$PWD` (or is a subdir
 of it, configurable later). `-h` and `--help` are reserved for help output;
-`cc-bin --help` prints to stderr and exits non-zero so the wrapper's
+`c3-bin --help` prints to stderr and exits non-zero so the wrapper's
 `eval "$cmd"` stays empty (no command to eval).
 
-### `cc n`
+### `c3 n`
 
 Skip everything. Emit `exec claude` (in current `$PWD`).
 
@@ -230,27 +230,27 @@ Skip everything. Emit `exec claude` (in current `$PWD`).
 
 ## 5. Shell wrapper
 
-`cc` itself is a binary; the binary writes a command to stdout. To make
-`cc` *change the user's directory and exec*, we ship a shell function:
+`c3` itself is a binary; the binary writes a command to stdout. To make
+`c3` *change the user's directory and exec*, we ship a shell function:
 
 ```bash
 # in ~/.zshrc / ~/.bashrc
-cc() {
+c3() {
   local cmd
-  cmd="$(command cc-bin "$@")" || return
+  cmd="$(command c3-bin "$@")" || return
   [ -n "$cmd" ] && eval "$cmd"
 }
 ```
 
 ```fish
-# in ~/.config/fish/functions/cc.fish
-function cc
-  set -l cmd (command cc-bin $argv); or return
+# in ~/.config/fish/functions/c3.fish
+function c3
+  set -l cmd (command c3-bin $argv); or return
   test -n "$cmd"; and eval $cmd
 end
 ```
 
-The actual binary is `cc-bin`; `cc` is the wrapper. `install.sh` adds the
+The actual binary is `c3-bin`; `c3` is the wrapper. `install.sh` adds the
 function to the user's shell rc and warns if not present.
 
 Why a wrapper: a child process cannot change its parent's `cwd` or `exec`
@@ -266,16 +266,16 @@ hyphens) so needs no quoting. Even though paths come from Claude's own JSON
 
 ### Escape hatch
 
-`CC_NO_WRAPPER=1 cc-bin ...` makes `cc-bin` print the command to stdout
+`C3_NO_WRAPPER=1 c3-bin ...` makes `c3-bin` print the command to stdout
 without expecting an `eval` wrapper. For users on shells we don't ship
-wrappers for, or those who prefer to run `eval "$(cc-bin)"` manually.
+wrappers for, or those who prefer to run `eval "$(c3-bin)"` manually.
 
 ---
 
 ## 6. Project layout
 
 ```
-cc/
+c3/
 ├── DESIGN.md
 ├── README.md
 ├── go.mod
@@ -288,9 +288,9 @@ cc/
 │   └── picker/
 │       └── fzf.go         ← exec fzf, parse selection
 ├── shell/
-│   ├── cc.bash
-│   ├── cc.zsh
-│   └── cc.fish
+│   ├── c3.bash
+│   ├── c3.zsh
+│   └── c3.fish
 └── install.sh             ← go build, copy bin, append shell snippet
 ```
 
@@ -300,18 +300,18 @@ cc/
 
 ### M1 — list + resume (1 day)
 - Scan, parse, sort, fzf, emit command, shell wrapper.
-- Verify: cancel mid-conversation → next `cc` shows it → resume works.
+- Verify: cancel mid-conversation → next `c3` shows it → resume works.
 
-### M2 — `cc here`, `cc n`, `cc <query>` (½ day)
+### M2 — `c3 here`, `c3 n`, `c3 <query>` (½ day)
 - Flag handling, query filter, new-session shortcut.
 
 ### M3 — Archive (½ day)
 - `archived.json` read/write, atomic.
-- Default picker filters; `cc -a` inverts; `cc archive`/`unarchive` commands.
+- Default picker filters; `c3 -a` inverts; `c3 archive`/`unarchive` commands.
 - Picker `Ctrl-A` binding (fzf `--bind`) to archive-in-place.
 
 ### M4 — Preview pane (½ day)
-- `cc --preview <uuid>` internal command tail-prints last few JSONL turns.
+- `c3 --preview <uuid>` internal command tail-prints last few JSONL turns.
 - Wire fzf `--preview`.
 
 ### M5 — Polish (½ day)
@@ -340,7 +340,7 @@ fzf-not-installed handling each took half-days previously hidden in M1).
    integration test that runs in M1: spawn, send "hi", quit, resume,
    expect previous turn visible.
 3. **Shell wrapper friction.** First-time install requires sourcing
-   `cc.zsh`. `install.sh` does this and verifies; print a clear "add this
+   `c3.zsh`. `install.sh` does this and verifies; print a clear "add this
    line if your shell isn't supported" message.
 4. **fzf must be installed.** Detect on first run, print one-line install
    hint (`brew install fzf`) and exit cleanly.
@@ -350,10 +350,10 @@ fzf-not-installed handling each took half-days previously hidden in M1).
 ## 9. Explicitly NOT building (v1)
 
 - A wrapper around the Claude UI.
-- A separate cc-session model on top of Claude's UUIDs (archive list is
+- A separate c3-session model on top of Claude's UUIDs (archive list is
   keyed by Claude's existing UUIDs, not a parallel session model).
 - fsnotify-based UUID auto-link (broken; Claude writes JSONL lazily).
 - Multiplexer / tab manager (use tmux or wezterm if you want it).
 - Image paste, naming, tagging, sync, daemon, GUI.
 - Hard-delete of sessions (archive only hides; user can `rm` the JSONL
-  themselves if they want it gone — outside cc's responsibility).
+  themselves if they want it gone — outside c3's responsibility).

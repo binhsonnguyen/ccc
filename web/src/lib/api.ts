@@ -1,4 +1,4 @@
-import type { C2Entry, ClaudeSessionsResponse } from '../types';
+import type { C3Entry, ClaudeSessionsResponse } from '../types';
 
 // All mutating routes need Content-Type so the server's json.Decoder gets
 // the body; Origin is set automatically by the browser to the page origin
@@ -10,7 +10,7 @@ interface ListOpts {
   includeLive?: boolean;
 }
 
-export async function listSessions(opts: ListOpts = {}): Promise<C2Entry[]> {
+export async function listSessions(opts: ListOpts = {}): Promise<C3Entry[]> {
   const qs = new URLSearchParams();
   if (opts.archived) qs.set('archived', 'true');
   if (opts.includeLive) qs.set('include', 'live');
@@ -52,14 +52,14 @@ export async function archiveSession(id: string): Promise<{ archived: boolean }>
   return (await r.json()) as { archived: boolean };
 }
 
-export async function renameSession(id: string, name: string): Promise<C2Entry> {
+export async function renameSession(id: string, name: string): Promise<C3Entry> {
   const r = await fetch(`/api/sessions/${encodeURIComponent(id)}`, {
     method: 'PATCH',
     headers: JSON_HEADERS,
     body: JSON.stringify({ name }),
   });
   if (!r.ok) throw await readError(r);
-  return (await r.json()) as C2Entry;
+  return (await r.json()) as C3Entry;
 }
 
 export async function removeSession(id: string, force = false): Promise<void> {
@@ -71,24 +71,24 @@ export async function removeSession(id: string, force = false): Promise<void> {
   if (!r.ok) throw await readError(r);
 }
 
-export async function createSession(cwd: string, name: string): Promise<C2Entry> {
+export async function createSession(cwd: string, name: string): Promise<C3Entry> {
   const r = await fetch('/api/sessions', {
     method: 'POST',
     headers: JSON_HEADERS,
     body: JSON.stringify({ cwd, name }),
   });
   if (!r.ok) throw await readError(r);
-  return (await r.json()) as C2Entry;
+  return (await r.json()) as C3Entry;
 }
 
-export async function bindSession(id: string, claudeUuid: string): Promise<C2Entry> {
+export async function bindSession(id: string, claudeUuid: string): Promise<C3Entry> {
   const r = await fetch(`/api/sessions/${encodeURIComponent(id)}/bind`, {
     method: 'POST',
     headers: JSON_HEADERS,
     body: JSON.stringify({ claudeUuid }),
   });
   if (!r.ok) throw await readError(r);
-  return (await r.json()) as C2Entry;
+  return (await r.json()) as C3Entry;
 }
 
 export async function listClaudeSessions(): Promise<ClaudeSessionsResponse> {
@@ -104,9 +104,9 @@ export async function listClaudeSessions(): Promise<ClaudeSessionsResponse> {
 // fetchSessionTail returns up to `bytes` raw bytes (ANSI escapes
 // preserved) from the live PTY scrollback. Empty string when no live
 // PTY (server returns 204) so callers can render a placeholder.
-export async function fetchSessionTail(c2Id: string, bytes = 2048): Promise<string> {
+export async function fetchSessionTail(c3Id: string, bytes = 2048): Promise<string> {
   const r = await fetch(
-    `/api/sessions/${encodeURIComponent(c2Id)}/tail?bytes=${bytes}`,
+    `/api/sessions/${encodeURIComponent(c3Id)}/tail?bytes=${bytes}`,
   );
   if (r.status === 204) return '';
   if (!r.ok) throw await readError(r);
@@ -116,9 +116,9 @@ export async function fetchSessionTail(c2Id: string, bytes = 2048): Promise<stri
 // fetchActivity returns the 60-bucket bytes/sec ring (oldest first) for a
 // live session, or null when no live PTY exists (server 204). The sidebar
 // polls this every ~2s for visible live rows to draw the sparkline.
-export async function fetchActivity(c2Id: string): Promise<number[] | null> {
+export async function fetchActivity(c3Id: string): Promise<number[] | null> {
   const r = await fetch(
-    `/api/sessions/${encodeURIComponent(c2Id)}/activity`,
+    `/api/sessions/${encodeURIComponent(c3Id)}/activity`,
   );
   if (r.status === 204) return null;
   if (!r.ok) throw await readError(r);
@@ -126,7 +126,7 @@ export async function fetchActivity(c2Id: string): Promise<number[] | null> {
   return j?.buckets ?? null;
 }
 
-export function ptyWsURL(c2Id: string): string {
+export function ptyWsURL(c3Id: string): string {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  return `${proto}//${location.host}/api/sessions/${encodeURIComponent(c2Id)}/pty`;
+  return `${proto}//${location.host}/api/sessions/${encodeURIComponent(c3Id)}/pty`;
 }

@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"c2/core"
+	"github.com/binhsonnguyen/ccc/core"
 )
 
 type Store struct{}
@@ -18,13 +18,13 @@ func New() *Store { return &Store{} }
 
 func Path() (string, error) {
 	if d := os.Getenv("XDG_DATA_HOME"); d != "" {
-		return filepath.Join(d, "c2", "sessions.json"), nil
+		return filepath.Join(d, "c3", "sessions.json"), nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".local", "share", "c2", "sessions.json"), nil
+	return filepath.Join(home, ".local", "share", "c3", "sessions.json"), nil
 }
 
 func (s *Store) Load() (*core.ArchiveFile, error) {

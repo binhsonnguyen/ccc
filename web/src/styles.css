@@ -513,8 +513,8 @@ code {
   margin: 0;
   font-size: 48px;
   font-weight: 200;
-  /* 0.02em is enough air for the lowercase "cc" without splitting it
-   * into two separate glyphs the way 0.16em did. */
+  /* 0.02em is enough air for the lowercase "ccc" without splitting it
+   * into separate glyphs the way 0.16em did. */
   letter-spacing: 0.02em;
   color: var(--text-dim);
   line-height: 1;

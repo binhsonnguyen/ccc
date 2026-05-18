@@ -1,4 +1,4 @@
-// c2-bin is the c2 CLI binary. See DESIGN.md for protocol with the wrapper.
+// c3-bin is the c3 CLI binary. See DESIGN.md for protocol with the wrapper.
 package main
 
 import (
@@ -10,37 +10,37 @@ import (
 	"strings"
 	"syscall"
 
-	"c2/adapters/archivejson"
-	"c2/adapters/claudefs"
-	"c2/core"
-	"c2/core/usecase"
-	"c2/internal/picker"
+	"github.com/binhsonnguyen/ccc/adapters/archivejson"
+	"github.com/binhsonnguyen/ccc/adapters/claudefs"
+	"github.com/binhsonnguyen/ccc/core"
+	"github.com/binhsonnguyen/ccc/core/usecase"
+	"github.com/binhsonnguyen/ccc/internal/picker"
 )
 
-const usage = `c2 — manage your curated Claude Code sessions
+const usage = `c3 — manage your curated Claude Code sessions
 
 Usage:
-  c2                  open the c2-session picker
+  c3                  open the c3-session picker
                         Enter   resume highlighted
                         Ctrl-N  new session (pick a directory)
                         Ctrl-B  bind: adopt an existing Claude session
                         Ctrl-A  archive highlighted
-  c2 <query>          picker pre-filtered by query
-  c2 -1 <query>       resume directly if exactly one match
-  c2 new [name]       create a new c2-session (prompts for directory) and spawn claude
-  c2 bind             open Claude-session picker; adopt the chosen one
-  c2 archive <id>     toggle archive (in c2 only — Claude files untouched)
-  c2 -a               picker over archived c2-sessions
-  c2 rename <id> <name>
-  c2 rm <id>          remove c2-session entry (Claude session left intact)
-  c2 gui              open the local web UI in your browser (spawns
-                        c2-server detached if not already running)
-  c2 -h, --help       show this help
+  c3 <query>          picker pre-filtered by query
+  c3 -1 <query>       resume directly if exactly one match
+  c3 new [name]       create a new c3-session (prompts for directory) and spawn claude
+  c3 bind             open Claude-session picker; adopt the chosen one
+  c3 archive <id>     toggle archive (in c3 only — Claude files untouched)
+  c3 -a               picker over archived c3-sessions
+  c3 rename <id> <name>
+  c3 rm <id>          remove c3-session entry (Claude session left intact)
+  c3 gui              open the local web UI in your browser (spawns
+                        c3-server detached if not already running)
+  c3 -h, --help       show this help
 
 Environment:
-  C2_NO_WRAPPER=1     also echo eval'd command to stderr
-  C2_SERVER_PORT=N    c2-server listen port (default 7755; 0 = random)
-  C2_SERVER_IDLE_MINUTES=N  shut server down after N min idle (default 15, 0 = off)
+  C3_NO_WRAPPER=1     also echo eval'd command to stderr
+  C3_SERVER_PORT=N    c3-server listen port (default 7755; 0 = random)
+  C3_SERVER_IDLE_MINUTES=N  shut server down after N min idle (default 15, 0 = off)
 `
 
 var store = archivejson.New()
@@ -50,7 +50,7 @@ func main() {
 		if errors.Is(err, picker.ErrCancelled) {
 			os.Exit(130)
 		}
-		fmt.Fprintln(os.Stderr, "c2:", err)
+		fmt.Fprintln(os.Stderr, "c3:", err)
 		os.Exit(1)
 	}
 }
@@ -87,25 +87,25 @@ func run(args []string) error {
 	return runPicker(picker.Options{Query: q}, false)
 }
 
-// runPicker is the heart of `c2` — load store, lazy-link pending entries,
+// runPicker is the heart of `c3` — load store, lazy-link pending entries,
 // show picker, dispatch on user action.
 func runPicker(opts picker.Options, archivedView bool) error {
 	if err := lazyLink(); err != nil {
-		fmt.Fprintln(os.Stderr, "c2: warn:", err)
+		fmt.Fprintln(os.Stderr, "c3: warn:", err)
 	}
 	f, err := store.Load()
 	if err != nil {
 		return err
 	}
 
-	var entries []core.C2Entry
+	var entries []core.C3Entry
 	if archivedView {
 		entries = f.ListArchived()
 	} else {
 		entries = f.ListActive()
 	}
 
-	res, err := picker.PickC2(entries, opts)
+	res, err := picker.PickC3(entries, opts)
 	if err != nil {
 		return err
 	}
@@ -145,20 +145,20 @@ func cmdNew(args []string) error {
 	if len(args) > 0 {
 		name = strings.Join(args, " ")
 	}
-	var created core.C2Entry
+	var created core.C3Entry
 	if err := store.Mutate(func(f *core.ArchiveFile) error {
 		created = f.AddEntry(name, dir, "")
 		return nil
 	}); err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "c2: created session %s (%s) in %s — Claude UUID will link on next `c2`\n", created.Name, created.ID, dir)
+	fmt.Fprintf(os.Stderr, "c3: created session %s (%s) in %s — Claude UUID will link on next `c3`\n", created.Name, created.ID, dir)
 	emit(fmt.Sprintf("cd %s && claude", shellQuote(dir)))
 	return nil
 }
 
 // pickNewDir gathers candidates and shows the dir picker. PWD is always first
-// (default highlight). Then unique cwds from c2-sessions, then unique cwds
+// (default highlight). Then unique cwds from c3-sessions, then unique cwds
 // from raw Claude sessions, both ordered by recency. Duplicates dropped.
 func pickNewDir(pwd string, f *core.ArchiveFile) (string, error) {
 	seen := map[string]bool{}
@@ -172,9 +172,9 @@ func pickNewDir(pwd string, f *core.ArchiveFile) (string, error) {
 	}
 	add("[PWD]", pwd)
 
-	// c2-session cwds, sorted by createdAt desc.
+	// c3-session cwds, sorted by createdAt desc.
 	for _, e := range f.ListAll() {
-		add("[c2]", e.CWD)
+		add("[c3]", e.CWD)
 	}
 
 	// Claude raw session cwds, sorted by mtime desc.
@@ -209,9 +209,9 @@ func cmdBind() error {
 		return err
 	}
 	name := filepath.Base(chosen.CWD)
-	var created core.C2Entry
+	var created core.C3Entry
 	if err := store.Mutate(func(f *core.ArchiveFile) error {
-		// Re-check inside the lock: another c2 may have bound this uuid.
+		// Re-check inside the lock: another c3 may have bound this uuid.
 		for _, e := range f.Sessions {
 			if e.ClaudeUUID == chosen.UUID {
 				return fmt.Errorf("session %s already bound", chosen.UUID[:8])
@@ -222,14 +222,14 @@ func cmdBind() error {
 	}); err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "c2: bound %s → %s (%s)\n", chosen.UUID[:8], created.Name, created.ID)
+	fmt.Fprintf(os.Stderr, "c3: bound %s → %s (%s)\n", chosen.UUID[:8], created.Name, created.ID)
 	emit(emitResume(created.CWD, created.ClaudeUUID))
 	return nil
 }
 
 func cmdArchive(args []string) error {
 	if len(args) != 1 {
-		return fmt.Errorf("usage: c2 archive <id>")
+		return fmt.Errorf("usage: c3 archive <id>")
 	}
 	entry, now, err := usecase.ToggleArchive(store, args[0])
 	if err != nil {
@@ -239,13 +239,13 @@ func cmdArchive(args []string) error {
 	if now {
 		state = "archived"
 	}
-	fmt.Fprintf(os.Stderr, "c2: %s %s\n", state, entry.Name)
+	fmt.Fprintf(os.Stderr, "c3: %s %s\n", state, entry.Name)
 	return nil
 }
 
 func cmdRename(args []string) error {
 	if len(args) < 2 {
-		return fmt.Errorf("usage: c2 rename <id> <new name...>")
+		return fmt.Errorf("usage: c3 rename <id> <new name...>")
 	}
 	newName := strings.Join(args[1:], " ")
 	if _, err := usecase.Rename(store, args[0], newName); err != nil {
@@ -254,13 +254,13 @@ func cmdRename(args []string) error {
 		// matches the previous "no session with id <id>" format.
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "c2: renamed %s → %s\n", args[0], newName)
+	fmt.Fprintf(os.Stderr, "c3: renamed %s → %s\n", args[0], newName)
 	return nil
 }
 
 func cmdRemove(args []string) error {
 	if len(args) != 1 {
-		return fmt.Errorf("usage: c2 rm <id>")
+		return fmt.Errorf("usage: c3 rm <id>")
 	}
 	// CLI runs in-process without a PTY manager — pass nil to skip the
 	// live-PTY gate. The "server is running" hint below is the user's
@@ -278,18 +278,18 @@ func cmdRemove(args []string) error {
 	if err := usecase.Remove(store, args[0], false, nil); err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "c2: removed %s (%s)\n", args[0], removedName)
+	fmt.Fprintf(os.Stderr, "c3: removed %s (%s)\n", args[0], removedName)
 	if serverIsAlive() {
 		fmt.Fprintln(os.Stderr,
-			"c2: note: c2-server is running. Any live PTY for this session "+
+			"c3: note: c3-server is running. Any live PTY for this session "+
 				"keeps running there until you close its tab in the GUI or "+
 				"restart the server.")
 	}
 	return nil
 }
 
-// serverIsAlive reports whether ~/.local/share/cc/server.port points at a
-// running c2-server. Best-effort; returns false on any error.
+// serverIsAlive reports whether ~/.local/share/c3/server.port points at a
+// running c3-server. Best-effort; returns false on any error.
 func serverIsAlive() bool {
 	dir := os.Getenv("XDG_DATA_HOME")
 	if dir == "" {
@@ -299,7 +299,7 @@ func serverIsAlive() bool {
 		}
 		dir = filepath.Join(home, ".local", "share")
 	}
-	b, err := os.ReadFile(filepath.Join(dir, "cc", "server.port"))
+	b, err := os.ReadFile(filepath.Join(dir, "c3", "server.port"))
 	if err != nil {
 		return false
 	}
@@ -324,7 +324,7 @@ func serverIsAlive() bool {
 //
 // Usage:
 //
-//	c2-bin --picker-action archive [--archived-view] <id>
+//	c3-bin --picker-action archive [--archived-view] <id>
 func cmdPickerAction(args []string) error {
 	archivedView := false
 	for len(args) > 0 && strings.HasPrefix(args[0], "--") {
@@ -336,7 +336,7 @@ func cmdPickerAction(args []string) error {
 		return fmt.Errorf("unknown picker-action flag: %s", args[0])
 	}
 	if len(args) < 1 {
-		return fmt.Errorf("usage: c2-bin --picker-action archive [--archived-view] <id>")
+		return fmt.Errorf("usage: c3-bin --picker-action archive [--archived-view] <id>")
 	}
 	action, rest := args[0], args[1:]
 
@@ -368,16 +368,16 @@ func emitRows(archivedView bool) error {
 	if err != nil {
 		return err
 	}
-	var entries []core.C2Entry
+	var entries []core.C3Entry
 	if archivedView {
 		entries = f.ListArchived()
 	} else {
 		entries = f.ListActive()
 	}
-	rows := picker.FormatC2Rows(entries)
+	rows := picker.FormatC3Rows(entries)
 	if len(rows) == 0 {
 		// fzf reload with empty input clears the list. Provide a hint row
-		// matching the empty-state convention used in PickC2.
+		// matching the empty-state convention used in PickC3.
 		fmt.Println("\t(no sessions — press Ctrl-N to create or Ctrl-B to bind one)")
 		return nil
 	}
@@ -385,7 +385,7 @@ func emitRows(archivedView bool) error {
 	return nil
 }
 
-// lazyLink fills in ClaudeUUID for any c2-session that's still pending,
+// lazyLink fills in ClaudeUUID for any c3-session that's still pending,
 // by matching cwd + creation time against Claude's session storage.
 func lazyLink() error {
 	// Cheap read-only check first to avoid taking the lock on every invocation.
@@ -428,7 +428,7 @@ func lazyLink() error {
 					continue
 				}
 				// Strict: only link to Claude sessions that have activity AFTER
-				// this c2-session was created. Avoids accidentally adopting
+				// this c3-session was created. Avoids accidentally adopting
 				// a pre-existing session that happens to share the cwd.
 				if !s.Modified.After(e.CreatedAt) {
 					continue
@@ -443,7 +443,7 @@ func lazyLink() error {
 			if best != nil {
 				e.ClaudeUUID = best.UUID
 				bound[best.UUID] = true
-				fmt.Fprintf(os.Stderr, "c2: linked %s → %s\n", e.Name, best.UUID[:8])
+				fmt.Fprintf(os.Stderr, "c3: linked %s → %s\n", e.Name, best.UUID[:8])
 			}
 		}
 		return nil
@@ -459,8 +459,8 @@ func emitResume(cwd, uuid string) string {
 
 func emit(cmd string) {
 	fmt.Println(cmd)
-	if os.Getenv("C2_NO_WRAPPER") == "1" {
-		fmt.Fprintln(os.Stderr, "c2: would run:", cmd)
+	if os.Getenv("C3_NO_WRAPPER") == "1" {
+		fmt.Fprintln(os.Stderr, "c3: would run:", cmd)
 	}
 }
 

@@ -15,7 +15,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { formatKeys, useShortcut } from '../lib/shortcuts';
-import type { C2Entry, Tab } from '../types';
+import type { C3Entry, Tab } from '../types';
 
 export interface PaletteActions {
   refresh: () => void;
@@ -33,11 +33,11 @@ export interface PaletteActions {
 interface Props {
   open: boolean;
   onClose: () => void;
-  sessions: C2Entry[] | null;
+  sessions: C3Entry[] | null;
   tabs: Tab[];
   activeUuid: string | null;
   view: 'active' | 'archived';
-  onOpenSession: (entry: C2Entry) => void;
+  onOpenSession: (entry: C3Entry) => void;
   onSwitchTab: (uuid: string) => void;
   actions: PaletteActions;
 }
@@ -196,7 +196,7 @@ export default function Palette({
       tabList.push({
         id: 'tab:' + t.claudeUuid,
         group: 'Tabs',
-        label: '[tab] ' + (t.name || t.c2Id),
+        label: '[tab] ' + (t.name || t.c3Id),
         detail: t.cwd,
         score,
         run: () => onSwitchTab(t.claudeUuid),
@@ -208,7 +208,7 @@ export default function Palette({
     // Actions
     const activeTab = tabs.find((t) => t.claudeUuid === activeUuid) ?? null;
     const activeSess = activeTab
-      ? sessions?.find((s) => s.id === activeTab.c2Id) ?? null
+      ? sessions?.find((s) => s.id === activeTab.c3Id) ?? null
       : null;
     type ActionDef = { label: string; hint?: string; when?: boolean; run: () => void };
     const acts: ActionDef[] = [

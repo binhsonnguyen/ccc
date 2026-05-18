@@ -1,4 +1,4 @@
-# cc-terminal — Plan for B + C + D + power-tool layer
+# ccc — Plan for B + C + D + power-tool layer
 
 > **Status: shipped (2026-05-15 → 2026-05-18).** Bucket A landed
 > first, then PRs 1–10 in the order spelled out at the bottom of
@@ -34,7 +34,7 @@ exposes none. Server only has archive. Both sides need work.
 
 ### D-1 — Server: missing REST endpoints
 
-All addressed by c2 id (8 hex), consistent with the existing
+All addressed by c3 id (8 hex), consistent with the existing
 `/api/sessions/:id/archive` and `/api/sessions/:id/pty` routes (see
 `GUI-DESIGN.md` §ID contract). All under the same-origin CSRF guard.
 
@@ -47,10 +47,10 @@ All addressed by c2 id (8 hex), consistent with the existing
 - `DELETE /api/sessions/:id` — remove. 409 if PTY live unless
   `?force=1`; on force, kick + kill before removing.
 - `POST /api/sessions  { "cwd": "/abs/path", "name": "<opt>" }` — new
-  c2-session entry. **Pending-UUID handling: option (b), see D-7.**
+  c3-session entry. **Pending-UUID handling: option (b), see D-7.**
 - `POST /api/sessions/:id/bind  { "claudeUuid": "<uuid>" }` — adopt
   an existing Claude session. Re-check inside `Mutate` that the uuid
-  isn't already bound (lift the pattern from `cmdBind` in c2-bin).
+  isn't already bound (lift the pattern from `cmdBind` in c3-bin).
 
 All routes go through `usecase.*` so the CLI and server share the
 mutation path. Where a use-case doesn't exist yet (rename, remove,
@@ -70,8 +70,8 @@ concurrent attach.
 
 `GET /api/claude-sessions` returns:
 - `unbound`: result of `claudefs.Scan` filtered to uuids not present
-  in any c2 entry. Powers the Bind dialog in D-5.
-- `cwds`: deduped recent cwds across both c2 entries and Claude's raw
+  in any c3 entry. Powers the Bind dialog in D-5.
+- `cwds`: deduped recent cwds across both c3 entries and Claude's raw
   storage, ordered by recency. Powers the cwd picker in D-5.
 
 One endpoint instead of two to keep the dialog's loading state
@@ -113,7 +113,7 @@ small inline form:
   cwd picker. Cwd picker: a free-text input prefilled with current PWD
   if the server happens to know it, plus a dropdown of recent cwds
   derived from existing sessions and Claude's own session storage
-  (mirrors `c2 new`'s candidate list).
+  (mirrors `c3 new`'s candidate list).
 - **Bind**: list from `/api/claude-sessions`; click one to adopt.
 
 On submit, POST to the appropriate route, refresh the list, and
@@ -130,7 +130,7 @@ trap + ESC + auto-focus first input).
 
 ### D-6 — Client: "Remove" guard rail
 
-Remove is destructive (drops the entry; `c2 rm` already warns when
+Remove is destructive (drops the entry; `c3 rm` already warns when
 server is running and PTY is live). In the GUI:
 - Two-step confirm in the menu (button turns red "Confirm?").
 - The list already carries `live` (from `?include=live` in D-1), so
@@ -154,10 +154,10 @@ Doesn't solve the dead-end on its own.
 
 (b) **Chosen.** `ptyrunner.Start` accepts an empty uuid: if empty,
 it runs `claude` (no `--resume`) in the cwd. The ptymgr keys this
-session by **c2 id** for the duration the uuid is empty, then
+session by **c3 id** for the duration the uuid is empty, then
 upgrades to keying by ClaudeUUID once Claude writes its first JSONL
 (`claudefs` watcher or a poll every 500 ms for ~20 s after spawn).
-On upgrade, the server PATCHes the c2 entry with the discovered
+On upgrade, the server PATCHes the c3 entry with the discovered
 uuid via `Mutate`. Existing list polling picks the new uuid up.
 
 (c) Forbid "New" in the GUI until the user has used the CLI to
@@ -165,7 +165,7 @@ create a session. Defeats the point of the GUI for new users.
 
 Implementation order inside D:
 1. ptyrunner: accept empty uuid, spawn `claude` no-resume.
-2. ptymgr: add a c2-id-keyed slot for "uuid-pending" sessions; key
+2. ptymgr: add a c3-id-keyed slot for "uuid-pending" sessions; key
    migration on uuid discovery.
 3. claudefs: watcher / poller that returns "new uuids since T" in a
    given cwd.
@@ -204,7 +204,7 @@ Items the two UX reviews both flagged, ordered by leverage.
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│ ⏵ ~/Code/cc-terminal · connected · 96×32 · pid 4821 · ⌘K │
+│ ⏵ ~/Code/ccc · connected · 96×32 · pid 4821 · ⌘K │
 └──────────────────────────────────────────────────────────┘
 ```
 
@@ -237,7 +237,7 @@ persist order to session storage.
 
 Center column, three quickstart cards: **Resume** (focus sidebar
 search), **New session** (opens D-5 form), **Shortcuts** (opens the
-shortcuts cheatsheet — see power-tool layer). Add a small ascii `cc`
+shortcuts cheatsheet — see power-tool layer). Add a small ascii `c3`
 mark in JetBrains Mono for branding without imagery.
 
 ### B-6 — Custom scrollbars
@@ -312,7 +312,7 @@ heartbeat WS). Risk: cost — cap to live PTYs only, ≤ 1 update/sec.
 **Thin-wrapper note:** this introduces transient *derived* state in
 `ptymgr` (bytes/sec counter) that doesn't exist in any Claude file.
 Acceptable under the rule because (a) it's purely in-memory, never
-written to disk, never owned by cc; (b) it disappears with the
+written to disk, never owned by c3; (b) it disappears with the
 server. We update `GUI-DESIGN.md` to bless transient derived state
 in ptymgr the same way the scrollback ring is blessed today, before
 shipping this. If that update is rejected, drop C-1.
@@ -358,8 +358,8 @@ deferred.
 
 Today the CLI calls `usecase.ToggleArchive` directly and the server
 also calls it. Continue that pattern. Every new mutation (rename,
-remove, new, bind) lands in `core/usecase/` first, then both `cmd/c2-
-bin/main.go` and `cmd/c2-server/main.go` route through it. flock
+remove, new, bind) lands in `core/usecase/` first, then both `cmd/c3-
+bin/main.go` and `cmd/c3-server/main.go` route through it. flock
 inside `archivejson.Store.Mutate` keeps everyone honest.
 
 ### Don't model "session state" beyond what claude already gives us
@@ -408,7 +408,7 @@ flow that worked in Phases 1–4 stays.
 
 ### Items intentionally not in this plan
 
-- `c2 -1 <query>` auto-resume CLI equivalent — Sidebar filter (B-2)
+- `c3 -1 <query>` auto-resume CLI equivalent — Sidebar filter (B-2)
   + Enter on the only match is good enough. No bespoke shortcut.
 - Session group / folder in the sidebar — UX-REVIEW C suggested it;
   deferred to a later cycle. Quick filter + groups by cwd basename

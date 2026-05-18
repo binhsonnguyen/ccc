@@ -1,9 +1,9 @@
-// c2-server hosts the local HTTP+WS bridge between the browser xterm.js
+// c3-server hosts the local HTTP+WS bridge between the browser xterm.js
 // client and a pool of `claude --resume <uuid>` PTYs. See GUI-DESIGN.md
 // Phase 2 for the architecture.
 //
 // Binds strictly to 127.0.0.1 on a random OS-assigned port. Writes the
-// chosen port + pid to ~/.local/share/cc/server.port for `cc gui` to
+// chosen port + pid to ~/.local/share/c3/server.port for `cc gui` to
 // discover (and to detect duplicate launches). On signal, kills all live
 // PTYs and removes the discovery file.
 package main
@@ -25,12 +25,12 @@ import (
 	"syscall"
 	"time"
 
-	"c2/adapters/archivejson"
-	"c2/adapters/claudefs"
-	"c2/core"
-	"c2/core/usecase"
-	"c2/internal/ptymgr"
-	"c2/internal/webdev"
+	"github.com/binhsonnguyen/ccc/adapters/archivejson"
+	"github.com/binhsonnguyen/ccc/adapters/claudefs"
+	"github.com/binhsonnguyen/ccc/core"
+	"github.com/binhsonnguyen/ccc/core/usecase"
+	"github.com/binhsonnguyen/ccc/internal/ptymgr"
+	"github.com/binhsonnguyen/ccc/internal/webdev"
 
 	"github.com/coder/websocket"
 )
@@ -46,7 +46,7 @@ var (
 // so a top-level panic recover can still remove it. Defers inside run()
 // cover the normal path; this is the belt-and-braces case where a panic
 // (possibly from a non-main goroutine after being recovered into main)
-// would otherwise leave a stale ~/.local/share/cc/server.port behind.
+// would otherwise leave a stale ~/.local/share/c3/server.port behind.
 var portFileCleanup func()
 
 func main() {
@@ -59,7 +59,7 @@ func main() {
 		}
 	}()
 	if err := run(); err != nil {
-		fmt.Fprintln(os.Stderr, "c2-server:", err)
+		fmt.Fprintln(os.Stderr, "c3-server:", err)
 		os.Exit(1)
 	}
 }
@@ -73,13 +73,13 @@ func run() error {
 		return err
 	}
 	if existing, alive := readAlivePort(portFile); alive {
-		fmt.Fprintf(os.Stderr, "c2-server: already running at http://127.0.0.1:%d\n", existing)
+		fmt.Fprintf(os.Stderr, "c3-server: already running at http://127.0.0.1:%d\n", existing)
 		fmt.Printf("http://127.0.0.1:%d\n", existing)
 		return nil
 	}
 
 	// 2. Bind 127.0.0.1:<port>. Default is a fixed port so the URL stays
-	//    bookmarkable across launches; C2_SERVER_PORT=0 falls back to a
+	//    bookmarkable across launches; C3_SERVER_PORT=0 falls back to a
 	//    random OS-assigned port for dev/debug or to side-step a
 	//    bind-collision.
 	requestedPort := portFromEnv()
@@ -87,7 +87,7 @@ func run() error {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		if requestedPort != 0 {
-			return fmt.Errorf("listen %s: %w\nhint: set C2_SERVER_PORT=0 for a random port, or pick another", addr, err)
+			return fmt.Errorf("listen %s: %w\nhint: set C3_SERVER_PORT=0 for a random port, or pick another", addr, err)
 		}
 		return fmt.Errorf("listen: %w", err)
 	}
@@ -105,14 +105,14 @@ func run() error {
 	originHostAlt := fmt.Sprintf("localhost:%d", port)
 
 	// Wire the discovery → bind hook BEFORE we accept any WS attach.
-	// When a pending session's uuid surfaces in claudefs, PATCH the c2
+	// When a pending session's uuid surfaces in claudefs, PATCH the c3
 	// entry so subsequent /api/sessions list reflects the link.
 	manager.SetUUIDDiscoveredHook(func(sessionKey, newUUID string) {
 		if _, err := usecase.Bind(store, sessionKey, newUUID); err != nil {
-			fmt.Fprintf(os.Stderr, "c2-server: discovery bind %s → %s failed: %v\n",
+			fmt.Fprintf(os.Stderr, "c3-server: discovery bind %s → %s failed: %v\n",
 				sessionKey, newUUID, err)
 		} else {
-			fmt.Fprintf(os.Stderr, "c2-server: discovery: %s → %s\n",
+			fmt.Fprintf(os.Stderr, "c3-server: discovery: %s → %s\n",
 				sessionKey, shortUUID(newUUID))
 		}
 	})
@@ -142,19 +142,19 @@ func run() error {
 	defer idleCancel()
 	idleTriggered := make(chan struct{})
 	if idleTimeout > 0 {
-		fmt.Fprintf(os.Stderr, "c2-server: idle watchdog: shutdown after %d minutes of inactivity\n",
+		fmt.Fprintf(os.Stderr, "c3-server: idle watchdog: shutdown after %d minutes of inactivity\n",
 			int(idleTimeout.Minutes()))
 		startIdleWatcher(idleCtx, manager, idleTimeout, idleTriggered)
 	} else {
-		fmt.Fprintln(os.Stderr, "c2-server: idle watchdog disabled (C2_SERVER_IDLE_MINUTES=0)")
+		fmt.Fprintln(os.Stderr, "c3-server: idle watchdog disabled (C3_SERVER_IDLE_MINUTES=0)")
 	}
 
 	go func() {
 		select {
 		case <-ctx.Done():
-			fmt.Fprintln(os.Stderr, "c2-server: shutting down")
+			fmt.Fprintln(os.Stderr, "c3-server: shutting down")
 		case <-idleTriggered:
-			fmt.Fprintf(os.Stderr, "c2-server: idle: shutting down after %d minutes of inactivity\n",
+			fmt.Fprintf(os.Stderr, "c3-server: idle: shutting down after %d minutes of inactivity\n",
 				int(idleTimeout.Minutes()))
 		}
 		shutCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -164,7 +164,7 @@ func run() error {
 	}()
 
 	url := fmt.Sprintf("http://127.0.0.1:%d", port)
-	fmt.Fprintf(os.Stderr, "c2-server: listening on %s (pid %d)\n", url, os.Getpid())
+	fmt.Fprintf(os.Stderr, "c3-server: listening on %s (pid %d)\n", url, os.Getpid())
 	fmt.Println(url) // stdout: machine-readable for callers like `cc gui`
 
 	if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -206,7 +206,7 @@ func handleListSessions(w http.ResponseWriter, r *http.Request) {
 	archived := r.URL.Query().Get("archived") == "true"
 	includeLive := r.URL.Query().Get("include") == "live"
 
-	var entries []core.C2Entry
+	var entries []core.C3Entry
 	if archived {
 		entries = f.ListArchived()
 	} else {
@@ -217,16 +217,16 @@ func handleListSessions(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, entries)
 		return
 	}
-	// Anonymous struct: embeds C2Entry plus a `live` boolean. Marshalled
+	// Anonymous struct: embeds C3Entry plus a `live` boolean. Marshalled
 	// JSON ends up with `live` as a sibling field thanks to the embedded
 	// promotion + anonymous wrapper.
 	type entryWithLive struct {
-		core.C2Entry
+		core.C3Entry
 		Live bool `json:"live"`
 	}
 	out := make([]entryWithLive, 0, len(entries))
 	for _, e := range entries {
-		out = append(out, entryWithLive{C2Entry: e, Live: manager.HasUUID(e.ClaudeUUID)})
+		out = append(out, entryWithLive{C3Entry: e, Live: manager.HasUUID(e.ClaudeUUID)})
 	}
 	writeJSON(w, out)
 }
@@ -427,8 +427,8 @@ func handleSessionTail(w http.ResponseWriter, r *http.Request, id string) {
 		return
 	}
 	// Look up the live PTY. Pending entries (no claudeUuid) are keyed
-	// by c2 id; bound entries by claude uuid. Try uuid first, fall
-	// back to c2 id for the pending case.
+	// by c3 id; bound entries by claude uuid. Try uuid first, fall
+	// back to c3 id for the pending case.
 	var sess *ptymgr.Session
 	if e.ClaudeUUID != "" {
 		sess = manager.GetSessionByUUID(e.ClaudeUUID)
@@ -499,8 +499,8 @@ func handleSessionActivity(w http.ResponseWriter, r *http.Request, id string) {
 }
 
 // handleClaudeSessions returns the bind dialog's data set: unbound claude
-// sessions (uuids not yet adopted by any c2 entry) plus a deduped cwd
-// recency list across both c2 entries and Claude's raw storage.
+// sessions (uuids not yet adopted by any c3 entry) plus a deduped cwd
+// recency list across both c3 entries and Claude's raw storage.
 func handleClaudeSessions(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -518,7 +518,7 @@ func handleClaudeSessions(w http.ResponseWriter, r *http.Request) {
 	}
 	unbound := f.UnboundClaudeSessions(ss)
 
-	// Merge cwds: c2-entry cwds first (ListAll preserves CreatedAt-desc
+	// Merge cwds: c3-entry cwds first (ListAll preserves CreatedAt-desc
 	// order), then claudefs cwds. Dedup keeping first occurrence.
 	seen := map[string]bool{}
 	var cwds []string
@@ -557,7 +557,7 @@ func handleSessionArchive(w http.ResponseWriter, r *http.Request, id string) {
 
 func handleSessionPTY(w http.ResponseWriter, r *http.Request, id, originHost, originHostAlt string) {
 	// 1. Look up the entry so we know cwd + claude uuid. The URL path
-	//    carries the c2-internal id (8 hex chars), the same key REST
+	//    carries the c3-internal id (8 hex chars), the same key REST
 	//    routes use. The pty manager keys by ClaudeUUID internally; we
 	//    resolve that here.
 	f, err := store.Load()
@@ -570,7 +570,7 @@ func handleSessionPTY(w http.ResponseWriter, r *http.Request, id, originHost, or
 		http.NotFound(w, r)
 		return
 	}
-	// Pending-uuid path: key by c2 id, spawn claude (no resume), let the
+	// Pending-uuid path: key by c3 id, spawn claude (no resume), let the
 	// discovery loop fill in the uuid later (D-7).
 	sessionKey := e.ClaudeUUID
 	if sessionKey == "" {
@@ -668,18 +668,18 @@ func handleAssets(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---------------------------------------------------------------------------
-// Discovery file (~/.local/share/cc/server.port)
+// Discovery file (~/.local/share/c3/server.port)
 // ---------------------------------------------------------------------------
 
 func portFilePath() (string, error) {
 	if d := os.Getenv("XDG_DATA_HOME"); d != "" {
-		return filepath.Join(d, "cc", "server.port"), nil
+		return filepath.Join(d, "c3", "server.port"), nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".local", "share", "cc", "server.port"), nil
+	return filepath.Join(home, ".local", "share", "c3", "server.port"), nil
 }
 
 // readAlivePort returns the recorded port if the recorded pid is alive,
@@ -783,7 +783,7 @@ func writeJSON(w http.ResponseWriter, v any) {
 	enc.SetIndent("", "  ")
 	if err := enc.Encode(v); err != nil {
 		// Body partially written — best we can do is log.
-		fmt.Fprintln(os.Stderr, "c2-server: write json:", err)
+		fmt.Fprintln(os.Stderr, "c3-server: write json:", err)
 	}
 }
 
@@ -802,7 +802,7 @@ func shortUUID(u string) string {
 }
 
 // Ensure core import isn't dropped — needed for ToggleArchive's return type.
-var _ = core.C2Entry{}
+var _ = core.C3Entry{}
 
 // ---------------------------------------------------------------------------
 // Idle auto-shutdown
@@ -813,16 +813,16 @@ var _ = core.C2Entry{}
 // long enough not to busy-loop.
 const idleCheckInterval = 30 * time.Second
 
-// idleTimeoutFromEnv reads C2_SERVER_IDLE_MINUTES. Default 15 minutes,
+// idleTimeoutFromEnv reads C3_SERVER_IDLE_MINUTES. Default 15 minutes,
 // 0 disables the watchdog.
 func idleTimeoutFromEnv() time.Duration {
-	v := os.Getenv("C2_SERVER_IDLE_MINUTES")
+	v := os.Getenv("C3_SERVER_IDLE_MINUTES")
 	if v == "" {
 		return 15 * time.Minute
 	}
 	n, err := strconv.Atoi(strings.TrimSpace(v))
 	if err != nil || n < 0 {
-		fmt.Fprintf(os.Stderr, "c2-server: warn: invalid C2_SERVER_IDLE_MINUTES=%q, using default\n", v)
+		fmt.Fprintf(os.Stderr, "c3-server: warn: invalid C3_SERVER_IDLE_MINUTES=%q, using default\n", v)
 		return 15 * time.Minute
 	}
 	return time.Duration(n) * time.Minute
@@ -830,21 +830,21 @@ func idleTimeoutFromEnv() time.Duration {
 
 // Default listen port for everyday use. Picked from the IANA
 // unassigned range so collisions with dev-server defaults (3000,
-// 5173, 8000, 8080) are unlikely. Set C2_SERVER_PORT=0 to fall back
+// 5173, 8000, 8080) are unlikely. Set C3_SERVER_PORT=0 to fall back
 // to a random OS-assigned port (useful when bind-collision happens
 // or for dev/debug scenarios).
 const defaultListenPort = 7755
 
-// portFromEnv reads C2_SERVER_PORT. Unset → defaultListenPort. "0" →
+// portFromEnv reads C3_SERVER_PORT. Unset → defaultListenPort. "0" →
 // 0 (random). Any other valid uint16 → that port. Invalid → default.
 func portFromEnv() int {
-	v := os.Getenv("C2_SERVER_PORT")
+	v := os.Getenv("C3_SERVER_PORT")
 	if v == "" {
 		return defaultListenPort
 	}
 	n, err := strconv.Atoi(strings.TrimSpace(v))
 	if err != nil || n < 0 || n > 65535 {
-		fmt.Fprintf(os.Stderr, "c2-server: warn: invalid C2_SERVER_PORT=%q, using default %d\n", v, defaultListenPort)
+		fmt.Fprintf(os.Stderr, "c3-server: warn: invalid C3_SERVER_PORT=%q, using default %d\n", v, defaultListenPort)
 		return defaultListenPort
 	}
 	return n

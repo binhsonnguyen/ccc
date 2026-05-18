@@ -9,7 +9,7 @@ import (
 )
 
 // Session mirrors a Claude raw JSONL session. JSON tags are camelCase to
-// match the rest of the public API (see C2Entry); GET /api/claude-sessions
+// match the rest of the public API (see C3Entry); GET /api/claude-sessions
 // returns `unbound: []Session` and the web client deserialises via those
 // names. IndexPath/JSONLPath/GitBranch are internal-only — omit from wire.
 type Session struct {
@@ -23,7 +23,7 @@ type Session struct {
 	Sidechain bool      `json:"sidechain,omitempty"`
 }
 
-type C2Entry struct {
+type C3Entry struct {
 	ID         string    `json:"id"`
 	Name       string    `json:"name"`
 	CWD        string    `json:"cwd"`
@@ -33,13 +33,13 @@ type C2Entry struct {
 
 type ArchiveFile struct {
 	Version  int       `json:"version"`
-	Sessions []C2Entry `json:"sessions"`
+	Sessions []C3Entry `json:"sessions"`
 	Archived []string  `json:"archived"`
 }
 
 const CurrentVersion = 1
 
-// NewID returns a fresh 8-char hex id, used as the c2-session slug.
+// NewID returns a fresh 8-char hex id, used as the c3-session slug.
 func NewID() string {
 	b := make([]byte, 4)
 	if _, err := rand.Read(b); err != nil {
@@ -48,7 +48,7 @@ func NewID() string {
 	return hex.EncodeToString(b)
 }
 
-func (f *ArchiveFile) Find(id string) *C2Entry {
+func (f *ArchiveFile) Find(id string) *C3Entry {
 	for i := range f.Sessions {
 		if f.Sessions[i].ID == id {
 			return &f.Sessions[i]
@@ -88,9 +88,9 @@ func (f *ArchiveFile) RemoveArchived(id string) {
 	}
 }
 
-// AddEntry appends a new c2-session with a fresh ID + CreatedAt.
-func (f *ArchiveFile) AddEntry(name, cwd, claudeUUID string) C2Entry {
-	e := C2Entry{
+// AddEntry appends a new c3-session with a fresh ID + CreatedAt.
+func (f *ArchiveFile) AddEntry(name, cwd, claudeUUID string) C3Entry {
+	e := C3Entry{
 		ID:         NewID(),
 		Name:       name,
 		CWD:        cwd,
@@ -102,18 +102,18 @@ func (f *ArchiveFile) AddEntry(name, cwd, claudeUUID string) C2Entry {
 }
 
 // ListActive returns non-archived entries sorted by CreatedAt desc.
-func (f *ArchiveFile) ListActive() []C2Entry { return f.filterAndSort(false) }
+func (f *ArchiveFile) ListActive() []C3Entry { return f.filterAndSort(false) }
 
 // ListAll returns every entry (archived included) sorted by CreatedAt desc.
-func (f *ArchiveFile) ListAll() []C2Entry { return f.filterAndSort(true) }
+func (f *ArchiveFile) ListAll() []C3Entry { return f.filterAndSort(true) }
 
 // ListArchived returns only archived entries, in stored order.
-func (f *ArchiveFile) ListArchived() []C2Entry {
+func (f *ArchiveFile) ListArchived() []C3Entry {
 	archivedSet := map[string]bool{}
 	for _, id := range f.Archived {
 		archivedSet[id] = true
 	}
-	var out []C2Entry
+	var out []C3Entry
 	for _, e := range f.Sessions {
 		if archivedSet[e.ID] {
 			out = append(out, e)
@@ -122,8 +122,8 @@ func (f *ArchiveFile) ListArchived() []C2Entry {
 	return out
 }
 
-func (f *ArchiveFile) filterAndSort(includeArchived bool) []C2Entry {
-	var out []C2Entry
+func (f *ArchiveFile) filterAndSort(includeArchived bool) []C3Entry {
+	var out []C3Entry
 	for _, e := range f.Sessions {
 		if !includeArchived && f.IsArchived(e.ID) {
 			continue
@@ -137,7 +137,7 @@ func (f *ArchiveFile) filterAndSort(includeArchived bool) []C2Entry {
 }
 
 // UnboundClaudeSessions filters `all` to non-sidechain sessions whose UUID is
-// not yet adopted by any c2-session.
+// not yet adopted by any c3-session.
 func (f *ArchiveFile) UnboundClaudeSessions(all []Session) []Session {
 	bound := map[string]bool{}
 	for _, e := range f.Sessions {

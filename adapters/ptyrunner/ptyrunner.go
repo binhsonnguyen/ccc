@@ -1,5 +1,5 @@
 // Package ptyrunner spawns `claude --resume <uuid>` inside a PTY so the
-// c2-server can pipe its I/O to a browser xterm.js client over WebSocket.
+// c3-server can pipe its I/O to a browser xterm.js client over WebSocket.
 //
 // This is the "claude-as-process" adapter used by the server. The CLI uses
 // a different (exec) path that replaces the user's shell — both are valid
@@ -18,7 +18,7 @@ import (
 // just `claude` (no resume) when uuid is empty. The empty-uuid path is for
 // brand-new "New session" entries created from the GUI: claude assigns a
 // uuid on its own and writes the JSONL; ptymgr's discovery loop watches
-// claudefs for the new file and upgrades the c2 entry via usecase.Bind.
+// claudefs for the new file and upgrades the c3 entry via usecase.Bind.
 
 // Session is a live PTY + child process pair. The caller owns the master
 // file: reading drains stdout/stderr; writing feeds stdin. Resize/Kill/Wait

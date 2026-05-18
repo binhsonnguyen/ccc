@@ -11,12 +11,12 @@ import { archiveSession, listSessions } from './lib/api';
 import { useShortcut } from './lib/shortcuts';
 import { disposeTerm, getTerm } from './lib/terminals';
 import { useZenMode } from './lib/useZenMode';
-import type { C2Entry, Tab, TabStatus } from './types';
+import type { C3Entry, Tab, TabStatus } from './types';
 
 const NARROW_BP = 800;
-const SIDEBAR_LS_KEY = 'cc-terminal:sidebar-open';
-const SIDEBAR_WIDTH_LS_KEY = 'cc-terminal:sidebar-width';
-const TAB_ORDER_SS_KEY = 'cc-terminal:tab-order';
+const SIDEBAR_LS_KEY = 'c3:sidebar-open';
+const SIDEBAR_WIDTH_LS_KEY = 'c3:sidebar-width';
+const TAB_ORDER_SS_KEY = 'c3:tab-order';
 const SIDEBAR_WIDTH_DEFAULT = 280;
 const SIDEBAR_WIDTH_MIN = 200;
 const SIDEBAR_WIDTH_MAX = 480;
@@ -85,7 +85,7 @@ function writeSidebarPref(v: boolean) {
 
 function AppInner() {
   // null = initial fetch in flight (Sidebar renders skeleton); [] = empty.
-  const [sessions, setSessions] = useState<C2Entry[] | null>(null);
+  const [sessions, setSessions] = useState<C3Entry[] | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => readSidebarWidth());
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeUuid, setActiveUuid] = useState<string | null>(null);
@@ -162,14 +162,14 @@ function AppInner() {
         includeLive: true,
       });
       setSessions(data);
-      // Discovery upgrade: if any open tab is keyed by a c2 id (pending)
+      // Discovery upgrade: if any open tab is keyed by a c3 id (pending)
       // and the server has now linked a uuid, swap the tab's keying so
       // future reattach paths through the canonical uuid. We match by
-      // c2Id; this is cheap, runs every 5s, and is idempotent.
+      // c3Id; this is cheap, runs every 5s, and is idempotent.
       setTabs((prev) =>
         prev.map((t) => {
-          if (t.claudeUuid && t.claudeUuid !== t.c2Id) return t;
-          const match = data.find((e) => e.id === t.c2Id);
+          if (t.claudeUuid && t.claudeUuid !== t.c3Id) return t;
+          const match = data.find((e) => e.id === t.c3Id);
           if (match && match.claudeUuid && match.claudeUuid !== t.claudeUuid) {
             return { ...t, claudeUuid: match.claudeUuid };
           }
@@ -339,15 +339,15 @@ function AppInner() {
 
   // ---- tab management ------------------------------------------------------
   // We allow opening tabs for pending entries (claudeUuid empty). The
-  // server keys those PTYs by c2 id under the hood (D-7); on the client
-  // we use the c2 id as the tab's dedup key until refresh upgrades it.
-  const openTab = useCallback((entry: C2Entry) => {
+  // server keys those PTYs by c3 id under the hood (D-7); on the client
+  // we use the c3 id as the tab's dedup key until refresh upgrades it.
+  const openTab = useCallback((entry: C3Entry) => {
     const key = entry.claudeUuid || entry.id;
     setTabs((prev) => {
-      if (prev.some((t) => t.claudeUuid === key || t.c2Id === entry.id)) return prev;
+      if (prev.some((t) => t.claudeUuid === key || t.c3Id === entry.id)) return prev;
       const t: Tab = {
         claudeUuid: key,
-        c2Id: entry.id,
+        c3Id: entry.id,
         name: entry.name || entry.id,
         cwd: entry.cwd || '',
         status: entry.claudeUuid ? 'connecting' : 'pending',
@@ -509,7 +509,7 @@ function AppInner() {
   }, []);
 
   // Palette helpers. closeAllTabs disposes terms + clears state in one
-  // pass; archiveActive looks up the c2 entry from the active tab and
+  // pass; archiveActive looks up the c3 entry from the active tab and
   // mutates via the API directly (cheaper than threading the Sidebar's
   // doArchive callback through props). copyCwd reuses the same fallback
   // pattern as StatusBar's copy hint.
@@ -521,7 +521,7 @@ function AppInner() {
   const archiveActive = useCallback(async () => {
     const t = tabs.find((x) => x.claudeUuid === activeUuid);
     if (!t) return;
-    const entry = sessions?.find((s) => s.id === t.c2Id) ?? null;
+    const entry = sessions?.find((s) => s.id === t.c3Id) ?? null;
     if (!entry) return;
     try {
       const r = await archiveSession(entry.id);
@@ -647,7 +647,7 @@ function AppInner() {
           ) : (
             tabs.map((tab) => (
               <TerminalPane
-                key={tab.c2Id}
+                key={tab.c3Id}
                 tab={tab}
                 visible={tab.claudeUuid === activeUuid}
                 onStatus={onStatus}

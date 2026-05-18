@@ -1,6 +1,6 @@
 package core
 
-// ArchiveStore persists the c2-session list. Mutate wraps a read-modify-write
+// ArchiveStore persists the c3-session list. Mutate wraps a read-modify-write
 // under a file lock so CLI and (future) server don't lose updates.
 type ArchiveStore interface {
 	Load() (*ArchiveFile, error)
@@ -13,9 +13,9 @@ type ArchiveStore interface {
 // session presence. Kept minimal so core stays adapter-free.
 //
 // HasUUID / KillUUID look up by Claude session uuid. HasKey / KillKey
-// look up by the manager's internal session key (c2 id while a session
-// is pending, uuid otherwise). Use-cases that delete c2 entries must
-// check BOTH — a pending session is keyed by c2 id with an empty uuid,
+// look up by the manager's internal session key (c3 id while a session
+// is pending, uuid otherwise). Use-cases that delete c3 entries must
+// check BOTH — a pending session is keyed by c3 id with an empty uuid,
 // so HasUUID alone misses it.
 type SessionsView interface {
 	HasUUID(uuid string) bool

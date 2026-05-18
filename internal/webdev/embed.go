@@ -1,5 +1,5 @@
 // Package webdev embeds the minimal Phase 2 HTML client into the
-// c2-server binary so it stays self-contained. Phase 3 will replace
+// c3-server binary so it stays self-contained. Phase 3 will replace
 // these assets with a Vite-built React bundle.
 package webdev
 
