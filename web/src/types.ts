@@ -70,4 +70,8 @@ export interface Tab {
   // buttons are disabled to prevent spam-click while the server is
   // SIGKILL'ing the child.
   killing?: boolean;
+  // C-5: count of regex matches in PTY output that arrived while this
+  // tab was inactive. Cleared on activation. Undefined ≡ 0; rendered as
+  // a small pill on inactive tabs in TabBar.
+  mentions?: number;
 }

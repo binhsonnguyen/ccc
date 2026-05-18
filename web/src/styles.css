@@ -1620,3 +1620,48 @@ code {
   padding: 4px 0;
   font-style: italic;
 }
+
+/* ---- C-4 zen-mode auto-fade ----------------------------------------- */
+
+/* Fade sidebar + tabbar chrome when the terminal is focused and the
+   pointer has been idle for ~4s. Asymmetric timing: 200ms ease-out for
+   the fade (gentle, don't startle), 80ms ease-out on reveal (snap back
+   as soon as the user moves). Reduced-motion users get the @media
+   override above — transitions collapse to ~0ms so the chrome simply
+   pops between states. */
+.app .sidebar-wrap,
+.app .tabbar-wrap {
+  transition: opacity 80ms ease-out;
+}
+.app.zen-faded .sidebar-wrap,
+.app.zen-faded .tabbar-wrap {
+  opacity: 0.4;
+  transition: opacity 200ms ease-out;
+}
+
+/* ---- C-5 mention badge ---------------------------------------------- */
+
+.tab-mentions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 16px;
+  padding: 0 5px;
+  margin-left: 6px;
+  border-radius: 8px;
+  background: var(--warn, #d97706);
+  color: #1a1407;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  /* Pulse on increment — `key` on the React node triggers a remount,
+     which replays this animation from frame 0. */
+  animation: mentionPulse 320ms ease-out;
+}
+@keyframes mentionPulse {
+  0%   { transform: scale(0.7); opacity: 0; }
+  60%  { transform: scale(1.15); opacity: 1; }
+  100% { transform: scale(1);    opacity: 1; }
+}

@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef } from 'react';
 import { getOrCreateTerm } from '../lib/terminals';
 import { ptyWsURL } from '../lib/api';
 import { useShortcut } from '../lib/shortcuts';
+import { stripAnsi } from '../lib/ansi';
+import { countMatches } from '../lib/mention';
 import { paneId, tabId } from './TabBar';
 import type { ControlMsg, Tab, TabStatus } from '../types';
 
@@ -14,6 +16,11 @@ interface Props {
   onPending: (uuid: string) => void;
   onReady: (uuid: string) => void;
   onClose: (uuid: string) => void;
+  // C-5: bump this tab's mention counter by `delta`. App is responsible
+  // for ignoring bumps on the active tab (cheaper than threading the
+  // active uuid through props — we also early-return below to skip the
+  // decode entirely when this pane is visible).
+  onMention: (uuid: string, delta: number) => void;
 }
 
 // One pane per open tab. We render *all* panes simultaneously and hide
@@ -29,9 +36,23 @@ export default function TerminalPane({
   onPending,
   onReady,
   onClose,
+  onMention,
 }: Props) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const primaryBtnRef = useRef<HTMLButtonElement | null>(null);
+  // visibleRef mirrors `visible` so the WS onmessage handler (captured
+  // once when openWS runs) can early-return for the active tab without
+  // re-binding on every visibility flip.
+  const visibleRef = useRef(visible);
+  useEffect(() => {
+    visibleRef.current = visible;
+  }, [visible]);
+  // Decoder reused across frames — TextDecoder allocates a small
+  // amount per construction, so we hoist it.
+  const decoderRef = useRef<TextDecoder | null>(null);
+  if (decoderRef.current === null) {
+    decoderRef.current = new TextDecoder('utf-8', { fatal: false });
+  }
   // Track whether WS setup has run for this uuid in this component
   // instance. React StrictMode double-invokes effects in dev; the global
   // term Map already guarantees a single xterm, but we also want to
@@ -97,7 +118,27 @@ export default function TerminalPane({
           }
           return;
         }
-        entry.term.write(new Uint8Array(ev.data as ArrayBuffer));
+        const bytes = new Uint8Array(ev.data as ArrayBuffer);
+        entry.term.write(bytes);
+        // C-5: count mention regex hits, but only on inactive tabs —
+        // for the visible tab the user is already watching the output
+        // and a badge would be redundant. Skip the decode entirely on
+        // the hot path when this pane is the active one.
+        if (!visibleRef.current) {
+          try {
+            // stream:false on purpose. The default regex matches ASCII
+            // tokens (Error/TODO/FIXME); decoder state leak across the
+            // visible→hidden boundary would chop the first bytes of a
+            // frame we *do* want to scan. The mention pass is best-effort
+            // anyway — a multi-byte char straddling frames just won't be
+            // part of the match.
+            const text = decoderRef.current!.decode(bytes);
+            const n = countMatches(stripAnsi(text));
+            if (n > 0) onMention(uuid, n);
+          } catch {
+            /* malformed frame: don't break the terminal write path */
+          }
+        }
       };
       ws.onclose = () => {
         if (entry.ws === ws) entry.ws = null;
@@ -105,7 +146,7 @@ export default function TerminalPane({
       };
       ws.onerror = () => onStatus(uuid, 'error');
     },
-    [onStatus, onKicked, onExit, onPending, onReady],
+    [onStatus, onKicked, onExit, onPending, onReady, onMention],
   );
 
   useEffect(() => {

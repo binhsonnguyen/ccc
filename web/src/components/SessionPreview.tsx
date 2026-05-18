@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { stripAnsi } from '../lib/ansi';
 
 interface Props {
   // Cwd shown verbatim in the tooltip header — Sidebar already passes
@@ -37,24 +38,6 @@ function shortenCwd(cwd: string): string {
     return rest ? `${HOME_PREFIX}/${rest}` : HOME_PREFIX;
   }
   return cwd;
-}
-
-// stripAnsi removes the common terminal escape sequences so a preview
-// renders as readable text. Naïve by design — we accept occasional
-// junk on DCS / OSC edge cases since the tooltip is decorative.
-export function stripAnsi(s: string): string {
-  return s
-    // CSI: ESC [ params final-byte
-    .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '')
-    // OSC: ESC ] ... BEL (or ST)
-    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
-    // DCS / PM / APC / SOS: ESC P|X|^|_ ... ST
-    .replace(/\x1b[PX^_][\s\S]*?\x1b\\/g, '')
-    // Other single-char escapes (charset selection, etc.)
-    .replace(/\x1b[()*+./][\s\S]/g, '')
-    .replace(/\x1b[=>]/g, '')
-    // Stray BEL / leftover ESCs
-    .replace(/[\x07\x1b]/g, '');
 }
 
 // lastLines returns up to `n` non-empty trailing lines from `s`.

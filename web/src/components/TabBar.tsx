@@ -334,6 +334,19 @@ export default function TabBar({ tabs, activeUuid, onSelect, onClose, onKill, on
           >
             <span className={`tab-status status-${t.status}`} aria-hidden="true" />
             <span className="tab-name">{t.name}</span>
+            {!isActive && t.mentions && t.mentions > 0 ? (
+              <span
+                // C-5 mention badge. Inactive tabs only — clearing on
+                // activate is the App's job (see activateTab). `key` on
+                // the count makes React replay the pulse animation
+                // every time the number bumps.
+                className="tab-mentions"
+                aria-label={`${t.mentions} new mention${t.mentions === 1 ? '' : 's'}`}
+                key={t.mentions}
+              >
+                {t.mentions > 99 ? '99+' : t.mentions}
+              </span>
+            ) : null}
             <button
               // tabIndex=-1: keep Tab key skipping these so the tablist
               // stays one focus stop. Users kill via Delete key or click.

@@ -10,6 +10,7 @@ import { ToastProvider, useToast } from './components/Toast';
 import { archiveSession, listSessions } from './lib/api';
 import { useShortcut } from './lib/shortcuts';
 import { disposeTerm, getTerm } from './lib/terminals';
+import { useZenMode } from './lib/useZenMode';
 import type { C2Entry, Tab, TabStatus } from './types';
 
 const NARROW_BP = 800;
@@ -114,6 +115,44 @@ function AppInner() {
   const userTouched = useRef(readSidebarPref() !== null);
 
   const { showToast } = useToast();
+
+  // C-4 zen-mode auto-fade. Hook owns the timer + listeners; we apply
+  // its boolean as a class on .app and let CSS handle the transition.
+  const zenFaded = useZenMode();
+
+  // C-5: clear mention count on activation, and bump on incoming
+  // matches. `activateTab` wraps setActiveUuid so every code path
+  // that switches tabs (TabBar click, keyboard nav, palette, etc.)
+  // goes through the reset — no need to remember to call both.
+  const activateTab = useCallback((uuid: string | null) => {
+    setActiveUuid(uuid);
+    if (uuid === null) return;
+    setTabs((prev) =>
+      prev.map((t) =>
+        t.claudeUuid === uuid && t.mentions ? { ...t, mentions: 0 } : t,
+      ),
+    );
+  }, []);
+
+  // activeUuid via ref so onMention's identity stays stable across
+  // tab switches. If it depended on activeUuid directly, every switch
+  // would invalidate openWS in TerminalPane (which closes over
+  // onMention) and rebuild the whole effect — closing + reopening the
+  // WebSocket and term.reset()-ing every pane on every click.
+  const activeUuidRef = useRef(activeUuid);
+  useEffect(() => {
+    activeUuidRef.current = activeUuid;
+  }, [activeUuid]);
+  const onMention = useCallback((uuid: string, delta: number) => {
+    if (uuid === activeUuidRef.current) return;
+    setTabs((prev) =>
+      prev.map((t) =>
+        t.claudeUuid === uuid
+          ? { ...t, mentions: (t.mentions ?? 0) + delta }
+          : t,
+      ),
+    );
+  }, []);
 
   // ---- session list polling ------------------------------------------------
   const refresh = useCallback(async () => {
@@ -315,20 +354,21 @@ function AppInner() {
       };
       return [...prev, t];
     });
-    setActiveUuid(key);
-  }, []);
+    activateTab(key);
+  }, [activateTab]);
 
   const closeTab = useCallback(
     (uuid: string) => {
       disposeTerm(uuid);
       setTabs((prev) => prev.filter((t) => t.claudeUuid !== uuid));
-      setActiveUuid((cur) => {
-        if (cur !== uuid) return cur;
+      if (activeUuidRef.current === uuid) {
         const remaining = tabs.filter((t) => t.claudeUuid !== uuid);
-        return remaining.length ? remaining[remaining.length - 1].claudeUuid : null;
-      });
+        // Route through activateTab so the promoted tab also gets its
+        // mention badge cleared — same contract as TabBar/Palette/etc.
+        activateTab(remaining.length ? remaining[remaining.length - 1].claudeUuid : null);
+      }
     },
-    [tabs],
+    [tabs, activateTab],
   );
 
   // Reorder lifted from TabBar (B-4). New uuid list = the dragged tab
@@ -533,7 +573,8 @@ function AppInner() {
     'app' +
     (narrow ? ' narrow' : '') +
     (narrow && sidebarOpen ? ' drawer-open' : '') +
-    (!sidebarOpen && !narrow ? ' sidebar-hidden' : '');
+    (!sidebarOpen && !narrow ? ' sidebar-hidden' : '') +
+    (zenFaded ? ' zen-faded' : '');
 
   return (
     <div className={appClass}>
@@ -582,7 +623,7 @@ function AppInner() {
         <TabBar
           tabs={tabs}
           activeUuid={activeUuid}
-          onSelect={setActiveUuid}
+          onSelect={activateTab}
           onClose={closeTab}
           onKill={killTab}
           onReorder={reorderTabs}
@@ -615,6 +656,7 @@ function AppInner() {
                 onPending={onPending}
                 onReady={onReady}
                 onClose={closeTab}
+                onMention={onMention}
               />
             ))
           )}
@@ -666,7 +708,7 @@ function AppInner() {
         activeUuid={activeUuid}
         view={view}
         onOpenSession={openTab}
-        onSwitchTab={setActiveUuid}
+        onSwitchTab={activateTab}
         actions={paletteActions}
       />
       <Cheatsheet open={cheatsheetOpen} onClose={() => setCheatsheetOpen(false)} />
