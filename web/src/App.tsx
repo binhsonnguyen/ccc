@@ -11,6 +11,7 @@ import { archiveSession, listSessions } from './lib/api';
 import { useShortcut } from './lib/shortcuts';
 import { disposeTerm, getTerm } from './lib/terminals';
 import { useZenMode } from './lib/useZenMode';
+import { parseTabUrl, writeTabUrl } from './lib/url-state';
 import type { C3Entry, Tab, TabStatus } from './types';
 
 const NARROW_BP = 800;
@@ -89,6 +90,15 @@ function AppInner() {
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => readSidebarWidth());
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeUuid, setActiveUuid] = useState<string | null>(null);
+  // URL hash is the source of truth for which tabs/active are open across
+  // reloads. Parse synchronously on first render so we know what to open
+  // as soon as the sessions list arrives (see hydration effect below).
+  // localStorage tab order is honored only as a fallback when the hash is
+  // empty (legacy users); the next reload writes the URL and that path
+  // becomes irrelevant.
+  const initialUrlStateRef = useRef(
+    typeof window !== 'undefined' ? parseTabUrl(window.location.hash) : { ids: [], active: null },
+  );
   const [view, setView] = useState<SidebarView>('active');
   // Power-tool overlays (PLAN.md P-1, P-2). Mutually exclusive: opening
   // one closes the other so we never stack two centered modals.
@@ -389,35 +399,75 @@ function AppInner() {
       // Append any tabs that weren't in nextUuids (defensive — keeps
       // them from vanishing if caller passed an incomplete list).
       for (const t of byUuid.values()) reordered.push(t);
-      writeTabOrder(reordered.map((t) => t.claudeUuid));
       return reordered;
     });
   }, []);
 
-  // Persist tab order whenever it changes, and rehydrate once on first
-  // mount. Rehydration only reorders existing tabs (per-window session
-  // storage; tabs themselves don't survive a reload — but if a future
-  // change does add URL routing, this'll Just Work).
-  const orderHydratedRef = useRef(false);
+  // ---- URL-routed tab hydration -------------------------------------------
+  // On first sessions-list load, open tabs for any c3Ids present in the
+  // URL hash (or the legacy localStorage fallback when the hash is empty).
+  // Unknown c3Ids are silently dropped. Runs at most once per mount.
+  const hydratedRef = useRef(false);
   useEffect(() => {
-    if (!orderHydratedRef.current && tabs.length > 0) {
-      orderHydratedRef.current = true;
-      const saved = readTabOrder();
-      if (saved.length > 0) {
-        setTabs((prev) => {
-          const rank = new Map(saved.map((u, i) => [u, i]));
-          const sorted = [...prev].sort((a, b) => {
-            const ra = rank.has(a.claudeUuid) ? rank.get(a.claudeUuid)! : 1e9;
-            const rb = rank.has(b.claudeUuid) ? rank.get(b.claudeUuid)! : 1e9;
-            return ra - rb;
-          });
-          return sorted;
-        });
+    if (hydratedRef.current) return;
+    if (sessions === null) return; // wait for first fetch to settle
+    hydratedRef.current = true;
+
+    let ids = initialUrlStateRef.current.ids;
+    let active = initialUrlStateRef.current.active;
+    if (ids.length === 0) {
+      // Legacy fallback: previous versions stored tab order under
+      // claudeUuid in sessionStorage. Honor it ONCE, then the URL sync
+      // effect below writes the hash and future reloads use the URL.
+      const legacy = readTabOrder();
+      if (legacy.length > 0) {
+        // Map legacy uuid list → c3Ids via the sessions list.
+        const byUuid = new Map(sessions.map((s) => [s.claudeUuid, s.id]));
+        ids = legacy.map((u) => byUuid.get(u)).filter((x): x is string => !!x);
       }
-      return;
     }
+    if (ids.length === 0) return;
+
+    const byC3 = new Map(sessions.map((s) => [s.id, s]));
+    const toOpen: Tab[] = [];
+    for (const id of ids) {
+      const entry = byC3.get(id);
+      if (!entry) continue; // silently skip unknown
+      const key = entry.claudeUuid || entry.id;
+      toOpen.push({
+        claudeUuid: key,
+        c3Id: entry.id,
+        name: entry.name || entry.id,
+        cwd: entry.cwd || '',
+        status: entry.claudeUuid ? 'connecting' : 'pending',
+      });
+    }
+    if (toOpen.length === 0) return;
+    setTabs(toOpen);
+    const activeEntry = active ? byC3.get(active) : null;
+    const activeKey = activeEntry
+      ? activeEntry.claudeUuid || activeEntry.id
+      : toOpen[0].claudeUuid;
+    setActiveUuid(activeKey);
+  }, [sessions]);
+
+  // Mirror tabs/active into the URL hash on every change. replaceState
+  // means the back button doesn't step through tab edits; it also doesn't
+  // fire popstate, so this can't loop with the parser. Wait until after
+  // hydration so we don't blow away the incoming hash before we've read
+  // it (the parser runs synchronously, but sessions=null delays
+  // hydration; writing the URL early would still serialize empty tabs).
+  useEffect(() => {
+    if (!hydratedRef.current) return;
+    const activeTab = tabs.find((t) => t.claudeUuid === activeUuid);
+    writeTabUrl({
+      ids: tabs.map((t) => t.c3Id),
+      active: activeTab ? activeTab.c3Id : null,
+    });
+    // Keep the legacy localStorage in sync for one more cycle so a
+    // downgrade to an older bundle still finds something.
     writeTabOrder(tabs.map((t) => t.claudeUuid));
-  }, [tabs]);
+  }, [tabs, activeUuid]);
 
   const killTab = useCallback(
     (uuid: string) => {
