@@ -648,6 +648,7 @@ function AppInner() {
     archiveActive: () => void archiveActive(),
     copyCwd,
     openCheatsheet,
+    setTheme: onThemeChange,
   };
 
   const appClass =
@@ -789,6 +790,7 @@ function AppInner() {
         tabs={tabs}
         activeUuid={activeUuid}
         view={view}
+        themeName={themeName}
         onOpenSession={openTab}
         onSwitchTab={activateTab}
         actions={paletteActions}

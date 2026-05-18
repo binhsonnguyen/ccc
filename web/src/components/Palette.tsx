@@ -15,6 +15,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { formatKeys, useShortcut } from '../lib/shortcuts';
+import type { ThemeName } from '../lib/themes';
 import type { C3Entry, Tab } from '../types';
 
 export interface PaletteActions {
@@ -28,6 +29,11 @@ export interface PaletteActions {
   archiveActive: () => void;
   copyCwd: (cwd: string) => void;
   openCheatsheet: () => void;
+  // Theme switcher entries appear as palette actions so the only
+  // discoverable surface for "change theme" is Mod+K → "theme" (the
+  // cheatsheet footer still works as a click target for keyboard-shy
+  // users, but typing is faster).
+  setTheme: (n: ThemeName) => void;
 }
 
 interface Props {
@@ -37,6 +43,7 @@ interface Props {
   tabs: Tab[];
   activeUuid: string | null;
   view: 'active' | 'archived';
+  themeName: ThemeName;
   onOpenSession: (entry: C3Entry) => void;
   onSwitchTab: (uuid: string) => void;
   actions: PaletteActions;
@@ -105,6 +112,7 @@ export default function Palette({
   tabs,
   activeUuid,
   view,
+  themeName,
   onOpenSession,
   onSwitchTab,
   actions,
@@ -246,6 +254,18 @@ export default function Palette({
         run: () => activeTab && actions.copyCwd(activeTab.cwd),
       },
       { label: 'Show keyboard shortcuts', hint: '?', run: actions.openCheatsheet },
+      // Theme switchers. The current theme is omitted (no reason to
+      // "switch" to what you already have) so the only visible entries
+      // are the ones a click actually changes.
+      ...(
+        [
+          { name: 'dark' as const, label: 'Theme: Dark' },
+          { name: 'light' as const, label: 'Theme: Light' },
+          { name: 'solarized-dark' as const, label: 'Theme: Solarized Dark' },
+        ]
+          .filter((t) => t.name !== themeName)
+          .map((t) => ({ label: t.label, run: () => actions.setTheme(t.name) }))
+      ),
     ];
     const actList: Item[] = [];
     for (const a of acts) {
