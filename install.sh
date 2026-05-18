@@ -12,8 +12,10 @@ echo "› building c3-bin"
 (cd "$repo" && go build -o "$bin_dir/c3-bin" ./cmd/c3-bin)
 echo "› installed: $bin_dir/c3-bin"
 
-echo "› building c3-server"
-(cd "$repo" && go build -o "$bin_dir/c3-server" ./cmd/c3-server)
+# c3-server bakes in the installed default port (7755) via ldflag.
+# Source builds (plain `go build`) keep "0" → random; see Makefile.
+echo "› building c3-server (installed: port 7755)"
+(cd "$repo" && go build -ldflags '-X main.defaultListenPort=7755' -o "$bin_dir/c3-server" ./cmd/c3-server)
 echo "› installed: $bin_dir/c3-server"
 
 case ":$PATH:" in

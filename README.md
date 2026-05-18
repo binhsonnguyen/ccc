@@ -20,7 +20,7 @@ all stays in `~/.claude/projects/**`. You can stop using c3 and
 ## Install
 
 ```sh
-./install.sh
+./install.sh        # or: make install
 ```
 
 That builds `c3-bin` and `c3-server` into `~/.local/bin` and (for
@@ -33,6 +33,15 @@ source /path/to/ccc/shell/c3.sh
 
 Needs Go 1.26+, [`fzf`](https://github.com/junegunn/fzf), and (for
 the GUI) `claude` itself in `$PATH`.
+
+**Installed vs source builds.** The installer bakes a **fixed port
+7755** into c3-server (via `-ldflags`) so the GUI URL stays
+bookmarkable. Source builds (`go build`, `go run ./cmd/c3-server`,
+`go install …@latest`) default to a **random port** — better for dev
+where multiple checkouts shouldn't fight over one address. Either
+way, `C3_SERVER_PORT=NNNN` overrides; `=0` forces random. `c3 gui`
+discovers the running server through `~/.local/share/c3/server.port`,
+so the port number doesn't matter for the CLI flow.
 
 ## CLI cheatsheet
 
@@ -55,8 +64,9 @@ Picker hotkeys: `Enter` resume, `Ctrl-N` new, `Ctrl-B` bind,
 
 ## GUI cheatsheet
 
-`c3 gui` opens `http://127.0.0.1:7755` (override with
-`C3_SERVER_PORT=NNNN`, `=0` for random).
+`c3 gui` opens the local web UI; installed builds use
+`http://127.0.0.1:7755`, source builds get a random port (see
+[Install](#install)).
 
 | Key | Action |
 |---|---|
@@ -79,7 +89,7 @@ restore.
 
 | Var | Default | Effect |
 |---|---|---|
-| `C3_SERVER_PORT` | `7755` | listen port; `0` = random |
+| `C3_SERVER_PORT` | `7755` (installed) / random (source) | listen port; `0` = random |
 | `C3_SERVER_IDLE_MINUTES` | `15` | auto-shutdown after idle; `0` disables |
 | `C3_NO_WRAPPER` | unset | CLI also echoes the eval'd command to stderr |
 | `ccc:mention-regex` (localStorage) | `Error\|TODO\|FIXME` | regex matched against background-tab PTY output for the mention badge |

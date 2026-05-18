@@ -143,8 +143,15 @@ binary = stdout; text JSON `{type:"pending"|"ready"|"kicked"|"exit"|"error"}`.
 - `c3 gui` (CLI subcommand) spawns c3-server detached and opens the
   browser. Re-running finds the live server via the discovery file
   and just opens the browser — no duplicate.
-- **Default port 7755** (fixed for bookmark-ability). Override:
-  `C3_SERVER_PORT=NNNN` or `=0` for a random OS-assigned port.
+- **Default port depends on build mode.** Installed builds (via
+  `make install` / `install.sh` / future release binaries) bake
+  **7755** into c3-server through `-ldflags "-X
+  main.defaultListenPort=7755"` so the URL stays bookmarkable across
+  launches. Source builds (`go build`, `go run`, `go install`) keep
+  `0` → random OS-assigned port so multiple checkouts don't collide.
+  `C3_SERVER_PORT=NNNN` overrides either; `=0` forces random.
+  Startup log tags the mode: `(pid N, installed build)` vs `(pid N,
+  dev build)`.
 - Strict loopback bind. Same-origin Origin check on mutating REST
   and on WS `Accept`. No LAN access; not a goal.
 - **Idle auto-shutdown** after `C3_SERVER_IDLE_MINUTES` (default 15)

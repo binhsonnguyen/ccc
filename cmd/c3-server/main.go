@@ -2,10 +2,12 @@
 // client and a pool of `claude --resume <uuid>` PTYs. See GUI-DESIGN.md
 // Phase 2 for the architecture.
 //
-// Binds strictly to 127.0.0.1 on a random OS-assigned port. Writes the
-// chosen port + pid to ~/.local/share/c3/server.port for `cc gui` to
-// discover (and to detect duplicate launches). On signal, kills all live
-// PTYs and removes the discovery file.
+// Binds strictly to 127.0.0.1. Default port depends on build mode:
+// installed builds (ldflag override) use 7755; source builds use a
+// random OS-assigned port. C3_SERVER_PORT overrides either. Writes
+// the chosen port + pid to ~/.local/share/c3/server.port for
+// `c3 gui` to discover (and to detect duplicate launches). On
+// signal, kills all live PTYs and removes the discovery file.
 package main
 
 import (
@@ -78,10 +80,11 @@ func run() error {
 		return nil
 	}
 
-	// 2. Bind 127.0.0.1:<port>. Default is a fixed port so the URL stays
-	//    bookmarkable across launches; C3_SERVER_PORT=0 falls back to a
-	//    random OS-assigned port for dev/debug or to side-step a
-	//    bind-collision.
+	// 2. Bind 127.0.0.1:<port>. Installed builds default to a fixed
+	//    port (7755) so the URL stays bookmarkable across launches;
+	//    source builds default to 0 (random OS-assigned) so dev/debug
+	//    against multiple checkouts doesn't collide. C3_SERVER_PORT
+	//    overrides either way; =0 forces random.
 	requestedPort := portFromEnv()
 	addr := fmt.Sprintf("127.0.0.1:%d", requestedPort)
 	ln, err := net.Listen("tcp", addr)
@@ -164,7 +167,7 @@ func run() error {
 	}()
 
 	url := fmt.Sprintf("http://127.0.0.1:%d", port)
-	fmt.Fprintf(os.Stderr, "c3-server: listening on %s (pid %d)\n", url, os.Getpid())
+	fmt.Fprintf(os.Stderr, "c3-server: listening on %s (pid %d, %s build)\n", url, os.Getpid(), portMode())
 	fmt.Println(url) // stdout: machine-readable for callers like `cc gui`
 
 	if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -828,26 +831,45 @@ func idleTimeoutFromEnv() time.Duration {
 	return time.Duration(n) * time.Minute
 }
 
-// Default listen port for everyday use. Picked from the IANA
-// unassigned range so collisions with dev-server defaults (3000,
-// 5173, 8000, 8080) are unlikely. Set C3_SERVER_PORT=0 to fall back
-// to a random OS-assigned port (useful when bind-collision happens
-// or for dev/debug scenarios).
-const defaultListenPort = 7755
+// defaultListenPort is the port used when C3_SERVER_PORT is unset.
+// It is a string so the install build can override it via
+//
+//	go build -ldflags "-X main.defaultListenPort=7755" ./cmd/c3-server
+//
+// Source builds (plain `go build`, `go run`, `go install`) keep "0"
+// → random OS-assigned port, which is the right default for dev
+// (multiple concurrent checkouts, no bind-collision drama). Install
+// builds (Makefile `install`, install.sh, future GoReleaser) set
+// "7755" so the URL stays bookmarkable across launches.
+//
+// 7755 is in the IANA unassigned range so collisions with common
+// dev-server defaults (3000, 5173, 8000, 8080) are unlikely.
+var defaultListenPort = "0"
 
-// portFromEnv reads C3_SERVER_PORT. Unset → defaultListenPort. "0" →
-// 0 (random). Any other valid uint16 → that port. Invalid → default.
+// portFromEnv reads C3_SERVER_PORT. Unset → defaultListenPort (which
+// may itself be "0" for source builds or "7755" for installed
+// builds). "0" → 0 (random). Any other valid uint16 → that port.
+// Invalid → falls back to a hard-coded random (0) and warns.
 func portFromEnv() int {
 	v := os.Getenv("C3_SERVER_PORT")
 	if v == "" {
-		return defaultListenPort
+		v = defaultListenPort
 	}
 	n, err := strconv.Atoi(strings.TrimSpace(v))
 	if err != nil || n < 0 || n > 65535 {
-		fmt.Fprintf(os.Stderr, "c3-server: warn: invalid C3_SERVER_PORT=%q, using default %d\n", v, defaultListenPort)
-		return defaultListenPort
+		fmt.Fprintf(os.Stderr, "c3-server: warn: invalid port %q, using random (0)\n", v)
+		return 0
 	}
 	return n
+}
+
+// portMode returns a short tag for the startup log so the user can
+// tell at a glance whether this is an installed or source build.
+func portMode() string {
+	if defaultListenPort == "0" {
+		return "dev"
+	}
+	return "installed"
 }
 
 // startIdleWatcher polls the manager for activity and closes `fire` when
