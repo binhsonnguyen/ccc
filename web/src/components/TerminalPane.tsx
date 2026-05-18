@@ -15,6 +15,10 @@ interface Props {
   onExit: (uuid: string, code: number) => void;
   onPending: (uuid: string) => void;
   onReady: (uuid: string) => void;
+  // Server sent {type:"error",message}. Surface the message to the user;
+  // ws.onclose will follow but should not overwrite the more-specific
+  // error status (see App.onStatus guard).
+  onError: (uuid: string, message: string) => void;
   onClose: (uuid: string) => void;
   // C-5: bump this tab's mention counter by `delta`. App is responsible
   // for ignoring bumps on the active tab (cheaper than threading the
@@ -58,6 +62,7 @@ export default function TerminalPane({
   onExit,
   onPending,
   onReady,
+  onError,
   onClose,
   onMention,
 }: Props) {
@@ -129,7 +134,13 @@ export default function TerminalPane({
           if (!msg) return;
           if (msg.type === 'kicked') onKicked(uuid);
           else if (msg.type === 'exit') onExit(uuid, msg.code);
-          else if (msg.type === 'pending') {
+          else if (msg.type === 'error') {
+            // Server failed to attach (e.g. claude not in PATH). Surface
+            // the real message — ws.onclose will fire right after but the
+            // App.onStatus guard keeps us from getting downgraded to a
+            // generic "Disconnected".
+            onError(uuid, msg.message || 'attach failed');
+          } else if (msg.type === 'pending') {
             // Server is spawning `claude` no-resume; disable input until
             // ready arrives so we don't lose keystrokes the runner won't
             // route to the not-yet-launched child.
@@ -169,7 +180,7 @@ export default function TerminalPane({
       };
       ws.onerror = () => onStatus(uuid, 'error');
     },
-    [onStatus, onKicked, onExit, onPending, onReady, onMention],
+    [onStatus, onKicked, onExit, onPending, onReady, onError, onMention],
   );
 
   useEffect(() => {
@@ -387,7 +398,9 @@ export default function TerminalPane({
           <span className="banner-icon" aria-hidden="true">⚠</span>
           <span className="banner-text">
             {tab.status === 'error'
-              ? 'Connection error — server closed the WebSocket.'
+              ? tab.errorMessage
+                ? `Attach failed: ${tab.errorMessage}`
+                : 'Connection error — server closed the WebSocket.'
               : 'Disconnected — PTY may still be running.'}
           </span>
           <button className="btn btn-sm primary" onClick={reconnect}>

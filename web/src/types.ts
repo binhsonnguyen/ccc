@@ -74,4 +74,9 @@ export interface Tab {
   // tab was inactive. Cleared on activation. Undefined ≡ 0; rendered as
   // a small pill on inactive tabs in TabBar.
   mentions?: number;
+  // Error message from the server's last {type:"error"} control frame.
+  // Surfaced in the transport-problem banner when status === 'error' so
+  // the user sees the real reason (e.g. "claude not found in PATH")
+  // instead of a generic "Disconnected".
+  errorMessage?: string;
 }

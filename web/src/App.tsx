@@ -547,10 +547,29 @@ function AppInner() {
         // Don't downgrade pending → connected via ws.onopen; we only flip
         // out of 'pending' when the server explicitly sends {type:'ready'}.
         if (t.status === 'pending' && status === 'connected') return t;
+        // Don't let ws.onclose's generic 'disconnected' overwrite a
+        // specific 'error' that the server's last control frame set.
+        // Reconnect (which fires 'connecting' below) clears the error.
+        if (t.status === 'error' && status === 'disconnected') return t;
+        if (status === 'connecting' || status === 'connected') {
+          return { ...t, status, errorMessage: undefined };
+        }
         return { ...t, status };
       }),
     );
   }, []);
+
+  // Server sent {type:"error",message} during attach (e.g. claude not
+  // in PATH). Persist the message so the transport-problem banner can
+  // show the real reason instead of a generic "Disconnected".
+  const onError = useCallback((uuid: string, message: string) => {
+    setTabs((prev) =>
+      prev.map((t) =>
+        t.claudeUuid === uuid ? { ...t, status: 'error', errorMessage: message } : t,
+      ),
+    );
+    showToast(`Attach failed: ${message}`, { variant: 'error' });
+  }, [showToast]);
 
   const onReady = useCallback(
     (uuid: string) => {
@@ -717,6 +736,7 @@ function AppInner() {
                 onExit={onExit}
                 onPending={onPending}
                 onReady={onReady}
+                onError={onError}
                 onClose={closeTab}
                 onMention={onMention}
               />
