@@ -41,10 +41,13 @@ export function cwdHue(cwd: string): number {
 // 65% sat / 62% light reads well over #1e1e1e and #252526 without
 // clipping to neon on common hues. The -1 sentinel returns a neutral
 // gray so a pending/empty cwd doesn't get a red "error" vibe.
+// Note: lightness is read from --tint-l (defined per-theme in
+// styles.css). Dark theme keeps 62 %; light theme drops to ~45 % so
+// the hue still passes AA on a near-white background.
 export function cwdTint(cwd: string): string {
   const h = cwdHue(cwd);
   if (h < 0) return 'hsl(0 0% 45%)';
-  return `hsl(${h} 65% 62%)`;
+  return `hsl(${h} 65% var(--tint-l, 62%))`;
 }
 
 // Brighter variant used as foreground on top of the dim wash so the
@@ -53,7 +56,7 @@ export function cwdTint(cwd: string): string {
 export function cwdTintFg(cwd: string): string {
   const h = cwdHue(cwd);
   if (h < 0) return 'hsl(0 0% 75%)';
-  return `hsl(${h} 60% 78%)`;
+  return `hsl(${h} 60% var(--tint-fg-l, 78%))`;
 }
 
 // Subtle muted variant for tiny backgrounds (e.g. monogram chip in
@@ -62,7 +65,7 @@ export function cwdTintFg(cwd: string): string {
 export function cwdTintDim(cwd: string): string {
   const h = cwdHue(cwd);
   if (h < 0) return 'hsl(0 0% 18%)';
-  return `hsl(${h} 30% 22%)`;
+  return `hsl(${h} 30% var(--tint-dim-l, 22%))`;
 }
 
 // First letter of the basename, uppercased. Serves as a colorblind-safe

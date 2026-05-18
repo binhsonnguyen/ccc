@@ -13,11 +13,20 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { formatKeys, listShortcuts, useShortcut, type ShortcutScope } from '../lib/shortcuts';
+import type { ThemeName } from '../lib/themes';
 
 interface Props {
   open: boolean;
   onClose: () => void;
+  themeName: ThemeName;
+  onThemeChange: (n: ThemeName) => void;
 }
+
+const THEME_OPTIONS: Array<{ name: ThemeName; label: string }> = [
+  { name: 'dark', label: 'Dark' },
+  { name: 'light', label: 'Light' },
+  { name: 'solarized-dark', label: 'Solarized' },
+];
 
 const SCOPE_LABEL: Record<ShortcutScope, string> = {
   global: 'Global',
@@ -32,7 +41,7 @@ interface Row {
   keys: string[]; // multiple keys collapse into one row if same label
 }
 
-export default function Cheatsheet({ open, onClose }: Props) {
+export default function Cheatsheet({ open, onClose, themeName, onThemeChange }: Props) {
   const [filter, setFilter] = useState('');
   const inputRef = useRef<HTMLInputElement | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -202,6 +211,26 @@ export default function Cheatsheet({ open, onClose }: Props) {
               </div>
             ))
           )}
+        </div>
+        <div className="cheatsheet-footer" role="radiogroup" aria-label="Theme">
+          <span className="cheatsheet-footer-label">Theme</span>
+          <div className="cheatsheet-theme-switch">
+            {THEME_OPTIONS.map((opt) => (
+              <button
+                key={opt.name}
+                type="button"
+                role="radio"
+                aria-checked={themeName === opt.name}
+                className={
+                  'btn btn-sm cheatsheet-theme-btn' +
+                  (themeName === opt.name ? ' is-active' : '')
+                }
+                onClick={() => onThemeChange(opt.name)}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
     </div>,

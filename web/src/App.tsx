@@ -10,6 +10,7 @@ import { ToastProvider, useToast } from './components/Toast';
 import { archiveSession, listSessions } from './lib/api';
 import { useShortcut } from './lib/shortcuts';
 import { disposeTerm, getTerm } from './lib/terminals';
+import { applyTheme, getCurrentTheme, type ThemeName } from './lib/themes';
 import { useZenMode } from './lib/useZenMode';
 import { parseTabUrl, writeTabUrl } from './lib/url-state';
 import type { C3Entry, Tab, TabStatus } from './types';
@@ -109,6 +110,17 @@ function AppInner() {
   // `creating` state. Counter (not bool) so repeated clicks always
   // re-trigger even when Sidebar already had it open then closed.
   const [openNewSessionTick, setOpenNewSessionTick] = useState(0);
+
+  // Theme. initThemeEarly() in main.tsx already set the <html> class
+  // and the in-module `current` from localStorage before React mounted,
+  // so reading getCurrentTheme() here is consistent with first paint —
+  // no flicker. setThemeName re-applies (idempotent) which also walks
+  // any live terms; on first render the Map is empty so it's a no-op.
+  const [themeName, setThemeName] = useState<ThemeName>(() => getCurrentTheme());
+  const onThemeChange = useCallback((next: ThemeName) => {
+    applyTheme(next);
+    setThemeName(next);
+  }, []);
 
   // Sidebar/drawer state. Default: respect user pref if set, otherwise
   // open on wide viewports, closed on narrow.
@@ -761,7 +773,12 @@ function AppInner() {
         onSwitchTab={activateTab}
         actions={paletteActions}
       />
-      <Cheatsheet open={cheatsheetOpen} onClose={() => setCheatsheetOpen(false)} />
+      <Cheatsheet
+        open={cheatsheetOpen}
+        onClose={() => setCheatsheetOpen(false)}
+        themeName={themeName}
+        onThemeChange={onThemeChange}
+      />
     </div>
   );
 }

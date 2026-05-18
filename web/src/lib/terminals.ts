@@ -7,6 +7,7 @@
 // kick). Map keying enforces that invariant client-side too.
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
+import { getCurrentXtermTheme } from './themes';
 
 export interface TermEntry {
   term: Terminal;
@@ -35,11 +36,7 @@ export function getOrCreateTerm(uuid: string): TermEntry {
     cursorBlink: true,
     convertEol: false,
     scrollback: 10000,
-    theme: {
-      background: '#1e1e1e',
-      foreground: '#d4d4d4',
-      cursor: '#d4d4d4',
-    },
+    theme: getCurrentXtermTheme(),
     allowProposedApi: true,
   });
   const fit = new FitAddon();

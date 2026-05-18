@@ -33,6 +33,56 @@
      loose for 11px headers; 0.06em reads tighter without feeling
      condensed. */
   --ls-uppercase: 0.06em;
+
+  /* Theming (cwd tint). Lightness for the hsl() values used in
+     cwdTint.ts so light mode can darken its hues for AA contrast on
+     near-white backgrounds. Overridden per-theme below. */
+  --tint-l: 62%;
+  --tint-fg-l: 78%;
+  --tint-dim-l: 22%;
+}
+
+/* ---- light theme ----------------------------------------------------- */
+html.theme-light {
+  color-scheme: light;
+  --bg: #fafafa;
+  --sidebar-bg: #f0f0f0;
+  --tab-bg: #e6e6e6;
+  --tab-active-bg: #fafafa;
+  --border: #d4d4d4;
+  --text: #1e1e1e;
+  --text-dim: #4b5563;
+  --text-faint: #6b7280;
+  --accent: #1d4ed8;
+  --danger: #b91c1c;
+  --warn: #a16207;
+  --ok: #15803d;
+
+  /* Darker hues for tints so they hit AA on a near-white bg. */
+  --tint-l: 45%;
+  --tint-fg-l: 32%;
+  --tint-dim-l: 86%;
+}
+
+/* ---- solarized-dark theme ------------------------------------------- */
+html.theme-solarized-dark {
+  color-scheme: dark;
+  --bg: #002b36;            /* base03 */
+  --sidebar-bg: #073642;    /* base02 */
+  --tab-bg: #073642;
+  --tab-active-bg: #002b36;
+  --border: #094956;
+  --text: #93a1a1;          /* base1 */
+  --text-dim: #839496;      /* base0 */
+  --text-faint: #657b83;    /* base00 */
+  --accent: #268bd2;        /* blue */
+  --danger: #dc322f;        /* red */
+  --warn: #b58900;          /* yellow */
+  --ok: #859900;            /* green */
+
+  --tint-l: 60%;
+  --tint-fg-l: 75%;
+  --tint-dim-l: 24%;
 }
 
 * {
@@ -1583,6 +1633,33 @@ code {
   color: var(--text-faint);
   font-size: var(--text-xs);
   padding: 0 2px;
+}
+
+/* Theme switcher at the bottom of the cheatsheet — radio-style row of
+   buttons. Reuses .btn styling; the active button just inverts to the
+   accent for a clear "selected" read. */
+.cheatsheet-footer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+  background: rgba(0,0,0,0.10);
+}
+.cheatsheet-footer-label {
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: var(--ls-uppercase);
+  color: var(--text-dim);
+}
+.cheatsheet-theme-switch {
+  display: flex;
+  gap: 4px;
+}
+.cheatsheet-theme-btn.is-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
 }
 
 /* C-2 last-frame hover preview. Fixed-positioned tooltip anchored to a
