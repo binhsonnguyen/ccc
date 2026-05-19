@@ -111,6 +111,13 @@ running PTY (live sessions only). Idle 4 s with the terminal focused
 fades the chrome out of your way ("zen mode"); move the mouse to
 restore.
 
+**Paste images straight into the chat.** `Cmd-V` (or drag-drop) an
+image onto a tab and c3 writes it to
+`~/.local/share/c3/<session-id>/images/`, then injects the absolute
+path as a `@<path>` mention for claude to read. Plain-text paste
+still falls through to xterm unchanged. The per-session image dir
+is wiped when the session is removed.
+
 ## Env vars
 
 | Var | Default | Effect |
