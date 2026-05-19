@@ -4,6 +4,7 @@ import StatusBar from './components/StatusBar';
 import TabBar from './components/TabBar';
 import TerminalPane from './components/TerminalPane';
 import Welcome from './components/Welcome';
+import NewSessionPane from './components/NewSessionPane';
 import Palette, { type PaletteActions } from './components/Palette';
 import Cheatsheet from './components/Cheatsheet';
 import { ToastProvider, useToast } from './components/Toast';
@@ -109,7 +110,24 @@ function AppInner() {
   // form. Sidebar watches this counter via effect and toggles its own
   // `creating` state. Counter (not bool) so repeated clicks always
   // re-trigger even when Sidebar already had it open then closed.
-  const [openNewSessionTick, setOpenNewSessionTick] = useState(0);
+  // openNewSessionTick still drives the legacy Sidebar inline-form
+  // path when onRequestCreate isn't wired (defensive — App always
+  // passes it now, but the Sidebar prop is optional). The setter is
+  // intentionally unused: the inline first-prompt flow supersedes it,
+  // but we keep the prop wire so a future hotfix can re-enable the
+  // old path without re-threading state.
+  const [openNewSessionTick] = useState(0);
+  // Inline first-prompt new-session flow. When true, the main pane
+  // renders NewSessionPane in place of Welcome/TerminalPane. Cleared
+  // on Cancel, on successful submit (we swap to the freshly opened
+  // tab), and whenever the user switches to a different tab via the
+  // tab bar / palette / keyboard. Always render NewSessionPane EXCLUSIVE
+  // of the terminal panes — never stack both.
+  const [creatingSession, setCreatingSession] = useState(false);
+  const startCreatingSession = useCallback(() => {
+    setCreatingSession(true);
+    setActiveUuid(null);
+  }, []);
 
   // Theme. initThemeEarly() in main.tsx already set the <html> class
   // and the in-module `current` from localStorage before React mounted,
@@ -148,6 +166,10 @@ function AppInner() {
   // goes through the reset — no need to remember to call both.
   const activateTab = useCallback((uuid: string | null) => {
     setActiveUuid(uuid);
+    // Activating any tab (or explicitly clearing) means the user has
+    // committed to viewing terminal content — close the new-session
+    // pane if it was open. Counter-review #9.
+    if (uuid !== null) setCreatingSession(false);
     if (uuid === null) return;
     setTabs((prev) =>
       prev.map((t) =>
@@ -634,12 +656,11 @@ function AppInner() {
     refresh: () => void refresh(),
     toggleSidebar,
     openNewSession: () => {
-      if (narrow) {
-        setSidebarOpen(true);
-        userTouched.current = true;
-        writeSidebarPref(true);
-      }
-      setOpenNewSessionTick((n) => n + 1);
+      // Inline first-prompt flow (2026-05-19): always route through
+      // the main-pane NewSessionPane. The sidebar's inline form is
+      // kept for the Bind dialog only; new-session creation lives
+      // here so the user can pre-fill a first prompt + auto-submit.
+      startCreatingSession();
     },
     setView,
     closeTab,
@@ -699,6 +720,17 @@ function AppInner() {
           narrow={narrow}
           showToast={showToast}
           openNewSessionTick={openNewSessionTick}
+          onRequestCreate={() => {
+            // Mirror Welcome's path: surface the drawer on narrow
+            // viewports so the user sees the result, then swap to
+            // the main-pane NewSessionPane.
+            if (narrow) {
+              setSidebarOpen(false); // close drawer so main pane is visible
+              userTouched.current = true;
+              writeSidebarPref(false);
+            }
+            startCreatingSession();
+          }}
         />
       </div>
       <main className="workspace">
@@ -711,19 +743,41 @@ function AppInner() {
           onReorder={reorderTabs}
         />
         <div className="pane-host">
-          {tabs.length === 0 ? (
+          {creatingSession ? (
+            // NewSessionPane replaces both Welcome and the terminal
+            // panes while active — never stack a form on top of a
+            // running terminal. We still mount existing TerminalPane
+            // instances hidden underneath so their WS stays attached
+            // (closing the form on success → activateTab swaps them
+            // back into view without dropping any output).
+            <>
+              <NewSessionPane
+                onCreated={(entry) => {
+                  openTab(entry);
+                  setCreatingSession(false);
+                }}
+                onCancel={() => setCreatingSession(false)}
+                showToast={showToast}
+              />
+              {tabs.map((tab) => (
+                <TerminalPane
+                  key={tab.c3Id}
+                  tab={tab}
+                  visible={false}
+                  onStatus={onStatus}
+                  onKicked={onKicked}
+                  onExit={onExit}
+                  onPending={onPending}
+                  onReady={onReady}
+                  onError={onError}
+                  onClose={closeTab}
+                  onMention={onMention}
+                />
+              ))}
+            </>
+          ) : tabs.length === 0 ? (
             <Welcome
-              onNewSession={() => {
-                // Surface drawer on narrow viewports so the form has a
-                // place to mount (Sidebar's narrow path drops it below
-                // the row list as a separate panel).
-                if (narrow) {
-                  setSidebarOpen(true);
-                  userTouched.current = true;
-                  writeSidebarPref(true);
-                }
-                setOpenNewSessionTick((n) => n + 1);
-              }}
+              onNewSession={startCreatingSession}
               onShowCheatsheet={openCheatsheet}
             />
           ) : (

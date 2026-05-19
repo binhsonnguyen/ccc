@@ -149,11 +149,22 @@ type Manager struct {
 	// startPTY is the function used to spawn a PTY. Production code uses
 	// ptyrunner.Start; tests swap in a stub so they don't depend on the
 	// real `claude` binary being installed.
-	startPTY func(cwd, uuid string) (*ptyrunner.Session, error)
+	//
+	// firstPrompt is non-empty only on the inline first-prompt flow
+	// (client POST included firstPrompt + claudeUuid). The runner forwards
+	// it to claude as a positional arg so the TUI pre-fills + auto-submits.
+	startPTY func(cwd, uuid, firstPrompt string) (*ptyrunner.Session, error)
 
 	// claudeScan is the claudefs scanner used by the discovery loop.
 	// Tests swap in a fake that returns synthetic sessions.
 	claudeScan scanner
+
+	// firstPromptsMu guards firstPrompts. Kept separate from m.mu because
+	// Attach pops from this map while already holding m.mu in the
+	// (key,cwd,uuid) lookup critical section — using the same mutex would
+	// either deadlock or force awkward unlock/relock sequences.
+	firstPromptsMu sync.Mutex
+	firstPrompts   map[string]string // uuid → prompt; popped on Attach
 }
 
 func New() *Manager {
@@ -162,7 +173,38 @@ func New() *Manager {
 		claimedUUIDs: map[string]bool{},
 		startPTY:     ptyrunner.Start,
 		claudeScan:   claudefs.New(),
+		firstPrompts: map[string]string{},
 	}
+}
+
+// SetFirstPrompt registers a prompt to auto-submit on the next Attach for
+// the given uuid. The prompt is held in-memory only — never persisted to
+// archive.json (which would leak chat content) and lost on server restart.
+// No-op for empty uuid or empty prompt. The entry is consumed (deleted)
+// on first Attach so a reconnect after the prompt has been submitted does
+// not re-fire it.
+func (m *Manager) SetFirstPrompt(uuid, prompt string) {
+	if uuid == "" || prompt == "" {
+		return
+	}
+	m.firstPromptsMu.Lock()
+	m.firstPrompts[uuid] = prompt
+	m.firstPromptsMu.Unlock()
+}
+
+// popFirstPrompt returns and removes the prompt registered for uuid, or
+// "" if none. Safe to call with an empty uuid.
+func (m *Manager) popFirstPrompt(uuid string) string {
+	if uuid == "" {
+		return ""
+	}
+	m.firstPromptsMu.Lock()
+	defer m.firstPromptsMu.Unlock()
+	p := m.firstPrompts[uuid]
+	if p != "" {
+		delete(m.firstPrompts, uuid)
+	}
+	return p
 }
 
 // SetActivityHook installs a callback fired on every Attach/Detach. Used
@@ -388,10 +430,14 @@ func (m *Manager) fireActivity() {
 // Returns the bound Session. Caller MUST eventually call Detach when the
 // client disconnects.
 func (m *Manager) Attach(key, cwd, claudeUUID string, c Client) (*Session, error) {
+	// Pop any registered first-prompt for this uuid BEFORE the lock —
+	// it's a separate mutex and the pop is naturally a one-shot, so
+	// holding both at once buys nothing.
+	firstPrompt := m.popFirstPrompt(claudeUUID)
 	m.mu.Lock()
 	s, ok := m.sessions[key]
 	if !ok {
-		p, err := m.startPTY(cwd, claudeUUID)
+		p, err := m.startPTY(cwd, claudeUUID, firstPrompt)
 		if err != nil {
 			m.mu.Unlock()
 			return nil, err

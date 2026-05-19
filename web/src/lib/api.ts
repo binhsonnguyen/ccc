@@ -71,11 +71,28 @@ export async function removeSession(id: string, force = false): Promise<void> {
   if (!r.ok) throw await readError(r);
 }
 
-export async function createSession(cwd: string, name: string): Promise<C3Entry> {
+interface CreateSessionOpts {
+  cwd: string;
+  name: string;
+  // Optional inline first-prompt flow. When set together with
+  // claudeUuid the server pre-binds the entry, stashes the prompt
+  // in-memory, and the next WS attach spawns
+  // `claude --session-id <uuid> <firstPrompt>` so the prompt
+  // auto-submits in the TUI (no pending banner).
+  firstPrompt?: string;
+  claudeUuid?: string;
+}
+
+export async function createSession(opts: CreateSessionOpts): Promise<C3Entry> {
   const r = await fetch('/api/sessions', {
     method: 'POST',
     headers: JSON_HEADERS,
-    body: JSON.stringify({ cwd, name }),
+    body: JSON.stringify({
+      cwd: opts.cwd,
+      name: opts.name,
+      firstPrompt: opts.firstPrompt ?? '',
+      claudeUuid: opts.claudeUuid ?? '',
+    }),
   });
   if (!r.ok) throw await readError(r);
   return (await r.json()) as C3Entry;

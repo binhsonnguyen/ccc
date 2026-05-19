@@ -15,6 +15,10 @@ interface Props {
   // on viewports below 800px where the inline form fights the sidebar
   // width.
   drawer: boolean;
+  // initialMode: which of the two tabs to land on. Defaults to 'new'.
+  // The sidebar's "Bind existing…" entry point passes 'bind' so the
+  // user doesn't have to click through the New tab first.
+  initialMode?: Mode;
   onCancel: () => void;
   // onCreated fires after a successful POST /api/sessions or after a
   // bind succeeds. Caller refreshes list and auto-opens a tab.
@@ -41,8 +45,8 @@ interface Cache {
 }
 let cache: Cache | null = null;
 
-export default function NewSessionForm({ drawer, onCancel, onCreated, showToast }: Props) {
-  const [mode, setMode] = useState<Mode>('new');
+export default function NewSessionForm({ drawer, initialMode, onCancel, onCreated, showToast }: Props) {
+  const [mode, setMode] = useState<Mode>(initialMode ?? 'new');
   const [cwd, setCwd] = useState('');
   const [name, setName] = useState('');
   const [nameTouched, setNameTouched] = useState(false);
@@ -140,7 +144,7 @@ export default function NewSessionForm({ drawer, onCancel, onCreated, showToast 
     setError(null);
     setSubmitting(true);
     try {
-      const entry = await createSession(cwd.trim(), name.trim());
+      const entry = await createSession({ cwd: cwd.trim(), name: name.trim() });
       onCreated(entry);
     } catch (err) {
       if (err instanceof ApiError) {
@@ -165,7 +169,7 @@ export default function NewSessionForm({ drawer, onCancel, onCreated, showToast 
       const fallbackName = basename(sess.cwd) || sess.uuid.slice(0, 8);
       let createdId: string | null = null;
       try {
-        const entry = await createSession(sess.cwd, fallbackName);
+        const entry = await createSession({ cwd: sess.cwd, name: fallbackName });
         createdId = entry.id;
         const bound = await bindSession(entry.id, sess.uuid);
         // Invalidate cache so the bind dialog refresh excludes this uuid.

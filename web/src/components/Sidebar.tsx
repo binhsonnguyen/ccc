@@ -45,6 +45,12 @@ interface Props {
   // other component) to open the inline new-session form. Effect below
   // watches it via dependency array.
   openNewSessionTick?: number;
+  // Inline first-prompt flow (2026-05-19): the "+ New session" button
+  // now routes to App's main-pane NewSessionPane instead of toggling
+  // a sidebar inline form. The Bind dialog still uses the local form
+  // (mounted via the openNewSessionTick path) because it's the only
+  // remaining caller of the new/bind two-tab UI here.
+  onRequestCreate?: () => void;
   // B-3: width control. App owns the value (persists to localStorage),
   // Sidebar owns the drag interaction.
   width: number;
@@ -148,6 +154,7 @@ export default function Sidebar({
   narrow,
   showToast,
   openNewSessionTick,
+  onRequestCreate,
   width,
   onWidthChange,
   resizable,
@@ -238,6 +245,11 @@ export default function Sidebar({
   const renameCancelledRef = useRef(false);
   const [renameDraft, setRenameDraft] = useState('');
   const [creating, setCreating] = useState(false);
+  // When the inline form opens for the Bind flow, force its mode to
+  // 'bind' so the user lands directly on the existing-uuid picker.
+  // (New-session creation moved to the main pane.) NewSessionForm
+  // reads this via initialMode and defaults to 'new' when unset.
+  const [creatingMode, setCreatingMode] = useState<'new' | 'bind'>('new');
   // Effect-driven: Welcome's "New" card increments the tick and we
   // open the form. Skip the initial mount (tick=0 baseline) so this
   // doesn't pop the form open on first render.
@@ -247,8 +259,14 @@ export default function Sidebar({
       firstTickRef.current = false;
       return;
     }
+    // Suppressed when onRequestCreate is wired: App handles the new-
+    // session request itself via the main-pane NewSessionPane and the
+    // sidebar inline form is reserved for Bind. Without this guard,
+    // every Welcome / palette "New session" trigger would open BOTH
+    // the main pane and the legacy sidebar form.
+    if (onRequestCreate) return;
     if (openNewSessionTick !== undefined) setCreating(true);
-  }, [openNewSessionTick]);
+  }, [openNewSessionTick, onRequestCreate]);
   const rowRefs = useRef<Map<string, HTMLLIElement | null>>(new Map());
 
   // C-2 hover preview state. Two timers: hoverTimer fires the fetch
@@ -896,18 +914,49 @@ export default function Sidebar({
         <button
           type="button"
           className={'new-session-btn' + (creating ? ' active' : '')}
-          onClick={() => setCreating((v) => !v)}
+          onClick={() => {
+            // Default behavior: hand off to App's main-pane new-session
+            // pane (inline first-prompt flow). If no handler is wired
+            // (e.g. an old caller), fall back to toggling the inline
+            // form so the button still does *something* useful.
+            if (onRequestCreate) {
+              onRequestCreate();
+              return;
+            }
+            setCreating((v) => !v);
+          }}
           aria-expanded={creating}
         >
           <span>+ New session</span>
-          <span className="new-session-chev" aria-hidden="true">
-            {creating ? '▴' : '▾'}
-          </span>
+          {!onRequestCreate && (
+            <span className="new-session-chev" aria-hidden="true">
+              {creating ? '▴' : '▾'}
+            </span>
+          )}
         </button>
+
+        {/* Compact secondary action: opens the inline form in Bind
+            mode. Kept here (rather than promoted to the main pane)
+            because Bind is a rarer "I already have a Claude uuid"
+            workflow and the picker UI fits neatly in the sidebar. */}
+        {onRequestCreate && !creating && (
+          <button
+            type="button"
+            className="bind-existing-btn"
+            onClick={() => {
+              setCreatingMode('bind');
+              setCreating(true);
+            }}
+            title="Adopt an existing Claude session by uuid"
+          >
+            Bind existing…
+          </button>
+        )}
 
         {creating && !narrow && (
           <NewSessionForm
             drawer={false}
+            initialMode={creatingMode}
             onCancel={() => setCreating(false)}
             onCreated={(entry) => {
               setCreating(false);
@@ -924,6 +973,7 @@ export default function Sidebar({
       {creating && narrow && (
         <NewSessionForm
           drawer={true}
+          initialMode={creatingMode}
           onCancel={() => setCreating(false)}
           onCreated={(entry) => {
             setCreating(false);

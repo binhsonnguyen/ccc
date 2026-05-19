@@ -248,17 +248,38 @@ func handleListSessions(w http.ResponseWriter, r *http.Request) {
 
 func handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		CWD  string `json:"cwd"`
-		Name string `json:"name"`
+		CWD         string `json:"cwd"`
+		Name        string `json:"name"`
+		FirstPrompt string `json:"firstPrompt"`
+		ClaudeUUID  string `json:"claudeUuid"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "invalid json", http.StatusBadRequest)
 		return
 	}
-	entry, err := usecase.NewEntry(store, body.CWD, body.Name)
+	// Edge case (counter-review #3): a client-supplied uuid without a
+	// firstPrompt would force `claude --resume <uuid>` against a uuid
+	// claude has never seen → spawn error. Quietly drop the uuid in that
+	// case and fall back to the pending flow.
+	uuid := strings.TrimSpace(body.ClaudeUUID)
+	firstPrompt := body.FirstPrompt
+	if uuid != "" && firstPrompt == "" {
+		uuid = ""
+	}
+	if uuid != "" && !usecase.IsValidUUID(uuid) {
+		http.Error(w, "validation failed: claudeUuid is not a valid uuid", http.StatusBadRequest)
+		return
+	}
+	entry, err := usecase.NewEntry(store, body.CWD, body.Name, uuid)
 	if err != nil {
 		mapUsecaseError(w, err)
 		return
+	}
+	// Stash the prompt BEFORE returning so a fast client (POST → immediate
+	// WS attach) finds it when Attach runs. The map is keyed by uuid so
+	// the new entry's claudeUuid must already be set above.
+	if entry.ClaudeUUID != "" && firstPrompt != "" {
+		manager.SetFirstPrompt(entry.ClaudeUUID, firstPrompt)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)

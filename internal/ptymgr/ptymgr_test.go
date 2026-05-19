@@ -181,8 +181,10 @@ func skipIfNoPTY(t *testing.T) {
 // newFakePTYStarter returns a ptymgr startPTY-compatible func that
 // launches the given command name + args inside a pty. Used by tests
 // to inject `cat`, `sleep`, `echo` etc. in place of the real `claude`.
-func newFakePTYStarter(name string, args ...string) func(cwd, uuid string) (*ptyrunner.Session, error) {
-	return func(cwd, uuid string) (*ptyrunner.Session, error) {
+func newFakePTYStarter(name string, args ...string) func(cwd, uuid, firstPrompt string) (*ptyrunner.Session, error) {
+	return func(cwd, uuid, firstPrompt string) (*ptyrunner.Session, error) {
+		_ = firstPrompt // intentionally unused — fakes don't exec claude
+
 		cmd := exec.Command(name, args...)
 		if cwd != "" {
 			cmd.Dir = cwd

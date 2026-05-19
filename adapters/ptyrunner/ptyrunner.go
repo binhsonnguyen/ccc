@@ -113,11 +113,17 @@ func augmentPath(env []string) []string {
 	return append(env, kv)
 }
 
-// Start spawns `claude --resume <uuid>` in cwd when uuid is non-empty, or
-// just `claude` (no resume) when uuid is empty. The empty-uuid path is for
-// brand-new "New session" entries created from the GUI: claude assigns a
-// uuid on its own and writes the JSONL; ptymgr's discovery loop watches
-// claudefs for the new file and upgrades the c3 entry via usecase.Bind.
+// Start spawns claude in cwd. Command shape depends on (uuid, firstPrompt):
+//
+//	uuid != "" && firstPrompt != ""  → claude --session-id <uuid> <firstPrompt>
+//	uuid == "" && firstPrompt != ""  → claude <firstPrompt>
+//	uuid != "" && firstPrompt == ""  → claude --resume <uuid>
+//	uuid == "" && firstPrompt == ""  → claude
+//
+// The first two shapes pre-fill + auto-submit the prompt inside claude's
+// TUI (verified against claude CLI 2026-05). The fourth is the original
+// "new pending session" path used by both CLI and GUI before the inline
+// first-prompt flow existed.
 
 // Session is a live PTY + child process pair. The caller owns the master
 // file: reading drains stdout/stderr; writing feeds stdin. Resize/Kill/Wait
@@ -131,18 +137,33 @@ type Session struct {
 // pseudo-terminal. TERM=xterm-256color so claude picks the truecolor TUI
 // path. Initial size is a sane default; the server will Resize() once the
 // browser reports its viewport.
-func Start(cwd, uuid string) (*Session, error) {
+func Start(cwd, uuid, firstPrompt string) (*Session, error) {
 	claudePath, err := resolveClaude()
 	if err != nil {
 		return nil, fmt.Errorf("ptyrunner: %w", err)
 	}
 	var cmd *exec.Cmd
-	if uuid == "" {
-		// uuid empty = new session; claude will assign one and write its
+	switch {
+	case uuid != "" && firstPrompt != "":
+		// Pre-assigned uuid + prompt → inline first-prompt flow.
+		// claude --session-id <uuid> "<prompt>" pre-fills + auto-submits
+		// in the TUI; the JSONL appears at the server's chosen uuid so
+		// no discovery rebind is needed. firstPrompt is passed as a
+		// single positional arg — exec.Command handles quoting; do NOT
+		// shell out, multi-line + backticks must survive verbatim.
+		cmd = exec.Command(claudePath, "--session-id", uuid, firstPrompt)
+	case uuid == "" && firstPrompt != "":
+		// No uuid (server didn't pre-assign) but the user wants their
+		// prompt auto-submitted. claude picks its own uuid; discovery
+		// loop rebinds.
+		cmd = exec.Command(claudePath, firstPrompt)
+	case uuid != "" && firstPrompt == "":
+		// Classic resume flow: re-attach to an existing claude session.
+		cmd = exec.Command(claudePath, "--resume", uuid)
+	default:
+		// Pending new session: claude assigns a uuid and writes its
 		// JSONL; the discovery loop in ptymgr upgrades the entry.
 		cmd = exec.Command(claudePath)
-	} else {
-		cmd = exec.Command(claudePath, "--resume", uuid)
 	}
 	cmd.Dir = cwd
 	// Inherit env, force TERM so claude doesn't fall back to dumb. Also
