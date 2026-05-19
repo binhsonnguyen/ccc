@@ -659,9 +659,28 @@ func (m *Manager) discoveryLoop(s *Session, cwd string, before map[string]bool) 
 			}
 			// Won the claim. Upgrade in-memory state and fire the hook.
 			s.mu.Lock()
+			oldKey := s.Key
 			s.UUID = x.UUID
+			s.Key = x.UUID
 			c := s.client
 			s.mu.Unlock()
+			// Rekey the manager's session map from the pending c3-id key
+			// to the canonical claudeUuid. Critical: once the c3 entry
+			// has a claudeUuid, handleSessionPTY resolves sessionKey to
+			// that uuid; without this rekey a fresh WS attach (e.g. the
+			// reconnect the client triggers right after seeing
+			// {type:"ready"}) would miss the existing session and spawn
+			// a SECOND `claude --resume <uuid>` process. Two claude
+			// children writing to the same JSONL deadlocks the chat
+			// (observed in 2026-05-19 user test).
+			m.mu.Lock()
+			if cur, ok := m.sessions[oldKey]; ok && cur == s {
+				if _, occupied := m.sessions[x.UUID]; !occupied {
+					delete(m.sessions, oldKey)
+					m.sessions[x.UUID] = s
+				}
+			}
+			m.mu.Unlock()
 			// Tell the currently-attached client (if any) that stdin is
 			// now safe — claude has switched to raw mode by the time
 			// JSONL appears. Best-effort; client may be mid-detach.
@@ -672,7 +691,10 @@ func (m *Manager) discoveryLoop(s *Session, cwd string, before map[string]bool) 
 			hook := m.onUUIDDiscovered
 			m.mu.Unlock()
 			if hook != nil {
-				hook(s.Key, x.UUID)
+				// Pass the ORIGINAL c3-id key — usecase.Bind looks the c3
+				// entry up by that id. s.Key has just been rekeyed to the
+				// uuid above, so use the snapshot we took before rekey.
+				hook(oldKey, x.UUID)
 			}
 			return
 		}

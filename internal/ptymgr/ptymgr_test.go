@@ -488,10 +488,22 @@ func TestDiscovery_FiresHookOnNewUUID(t *testing.T) {
 		t.Fatal("discovery hook did not fire within 3s")
 	}
 
-	// After discovery, HasUUID should report true for the discovered uuid
-	// even though the manager-map key is still the c3 id.
+	// After discovery, HasUUID should report true for the discovered uuid.
+	// As of the rekey fix the manager-map key is the new uuid (not c3 id).
 	if !m.HasUUID("newly-created") {
 		t.Error("HasUUID('newly-created') = false after discovery")
+	}
+
+	// Regression: after discovery, GetSession(uuid) must return the SAME
+	// session (rekey worked), and GetSession(oldC3Id) must be nil.
+	// Without this, a fresh Attach with the canonical uuid (as the
+	// client does right after seeing {type:"ready"}) misses the existing
+	// session and spawns a duplicate claude. Observed 2026-05-19.
+	if got := m.GetSession("newly-created"); got != sess {
+		t.Errorf("GetSession('newly-created') = %p, want sess=%p", got, sess)
+	}
+	if got := m.GetSession("c3id-002"); got != nil {
+		t.Errorf("GetSession('c3id-002') = %p, want nil (rekeyed)", got)
 	}
 }
 
