@@ -113,10 +113,11 @@ restore.
 
 **Paste images straight into the chat.** `Cmd-V` (or drag-drop) an
 image onto a tab and c3 writes it to
-`~/.local/share/c3/<session-id>/images/`, then injects the absolute
-path as a `@<path>` mention for claude to read. Plain-text paste
-still falls through to xterm unchanged. The per-session image dir
-is wiped when the session is removed.
+`$TMPDIR/c3/<session-id>/images/`, then injects the absolute path
+as a `@<path>` mention for claude to read. Plain-text paste still
+falls through to xterm unchanged. The on-disk copy is ephemeral —
+claude uploads the bytes at send-time and the OS reclaims `$TMPDIR`
+on reboot, so no explicit cleanup is needed.
 
 ## Env vars
 

@@ -426,13 +426,6 @@ func handleSessionDelete(w http.ResponseWriter, r *http.Request, id string) {
 		mapUsecaseError(w, err)
 		return
 	}
-	// Tear down per-session data dir (pasted images, etc.). Best-effort —
-	// a leftover dir is benign; logging the failure is enough.
-	if dir, err := sessionDataDir(id); err == nil {
-		if err := os.RemoveAll(dir); err != nil && !os.IsNotExist(err) {
-			fmt.Fprintf(os.Stderr, "c3-server: cleanup %s: %v\n", dir, err)
-		}
-	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -553,11 +546,12 @@ func handleSessionActivity(w http.ResponseWriter, r *http.Request, id string) {
 	})
 }
 
-// handleUploadImage saves one or more pasted/dragged image blobs to the
-// session's per-id images dir and returns their absolute paths. The web
-// client injects "@<path> " into the PTY stdin so claude sees a normal
-// @mention — keeping us thin-wrapper compliant: the file is real on disk
-// and `claude --resume` outside c3 can read it just the same.
+// handleUploadImage saves one or more pasted/dragged image blobs to a
+// per-session subdir under /tmp and returns their absolute paths. The
+// web client injects "@<path> " into the PTY stdin so claude sees a
+// normal @mention — claude reads the file at send-time and uploads the
+// bytes; after that the on-disk copy is ephemeral, so /tmp is the
+// right home (OS reclaims it on reboot, no cleanup-on-delete needed).
 //
 // No size cap by design (user runs c3 locally; we trust the source).
 // ParseMultipartForm keeps ≤32 MB in memory and spools the rest to a
@@ -585,11 +579,7 @@ func handleUploadImage(w http.ResponseWriter, r *http.Request, id string) {
 		http.NotFound(w, r)
 		return
 	}
-	dir, err := sessionImageDir(id)
-	if err != nil {
-		httpError(w, err, http.StatusInternalServerError)
-		return
-	}
+	dir := sessionImageDir(id)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		httpError(w, err, http.StatusInternalServerError)
 		return
@@ -649,27 +639,13 @@ func randomToken(n int) string {
 	return hex.EncodeToString(b)
 }
 
-// sessionImageDir is the on-disk directory for a session's pasted images:
-// $XDG_DATA_HOME/c3/<id>/images, or ~/.local/share/c3/<id>/images. Same
-// home logic as portFilePath so the lookup is consistent. Exported via
-// SessionImageDir below so core/usecase.Remove can clean it up.
-func sessionImageDir(id string) (string, error) {
-	base, err := sessionDataDir(id)
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(base, "images"), nil
-}
-
-func sessionDataDir(id string) (string, error) {
-	if d := os.Getenv("XDG_DATA_HOME"); d != "" {
-		return filepath.Join(d, "c3", id), nil
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".local", "share", "c3", id), nil
+// sessionImageDir is the on-disk directory for a session's pasted
+// images: <tmp>/c3/<id>/images. Tmp is OS-defined (os.TempDir() →
+// /tmp on Linux, /var/folders/... on macOS); either way the kernel
+// reclaims it on reboot. Per-id subdir keeps multi-session listings
+// distinguishable for debugging.
+func sessionImageDir(id string) string {
+	return filepath.Join(os.TempDir(), "c3", id, "images")
 }
 
 // handleClaudeSessions returns the bind dialog's data set: unbound claude
