@@ -62,9 +62,25 @@
 
   /* Bright row-name text on near-dark sidebar bg (was hardcoded #e6ebf1). */
   --session-name-fg: #e6ebf1;
+  /* Brighter still for the *open* row, to distinguish from merely-listed
+     rows. White reads on near-dark sidebar bg. Overridden per-theme. */
+  --session-name-open-fg: #ffffff;
   /* Glyph color on tint-coloured chip when row is active (near-black so
      it stays ≥ 6:1 across the whole hue wheel). */
   --tint-glyph-active: #0c0c0c;
+
+  /* Theme-aware neutral overlays for hover/active/highlight backgrounds.
+     Dark themes use white-on-dark (looks like subtle gray); light theme
+     uses black-on-light (same perceptual weight). Light theme would render
+     white overlays as invisible — bug fix from v0.2.7 pass. */
+  --overlay-faint:   rgba(255,255,255,0.03);
+  --overlay-subtle:  rgba(255,255,255,0.04);
+  --overlay-soft:    rgba(255,255,255,0.05);
+  --overlay:         rgba(255,255,255,0.06);
+  --overlay-strong:  rgba(255,255,255,0.08);
+  --overlay-hi:      rgba(255,255,255,0.10);
+  --overlay-hi-2:    rgba(255,255,255,0.12);
+  --overlay-ring:    rgba(255,255,255,0.18);
 }
 
 /* ---- light theme ----------------------------------------------------- */
@@ -105,8 +121,22 @@ html.theme-light {
 
   /* On light bg, the session-name uses normal dark text — no override. */
   --session-name-fg: var(--text);
+  /* Open-session name in light theme: accent blue (#1d4ed8 on #f0f0f0 ≈
+     8:1, AAA). Gives a clear "open = blue" cue since white-fg can't read. */
+  --session-name-open-fg: var(--accent);
   /* Tint at 45% lightness on light bg: near-white glyph contrasts best. */
   --tint-glyph-active: #ffffff;
+
+  /* Light theme: invert overlay base to black so subtle hover/active layers
+     read as gray on a near-white bg (white-on-light would be invisible). */
+  --overlay-faint:   rgba(0,0,0,0.03);
+  --overlay-subtle:  rgba(0,0,0,0.04);
+  --overlay-soft:    rgba(0,0,0,0.05);
+  --overlay:         rgba(0,0,0,0.06);
+  --overlay-strong:  rgba(0,0,0,0.08);
+  --overlay-hi:      rgba(0,0,0,0.10);
+  --overlay-hi-2:    rgba(0,0,0,0.12);
+  --overlay-ring:    rgba(0,0,0,0.18);
 }
 
 /* ---- solarized-dark theme ------------------------------------------- */
@@ -145,7 +175,19 @@ html.theme-solarized-dark {
   --warn-fg: #002b36;
 
   --session-name-fg: #eee8d5;       /* base2 — brightest readable on base02 */
+  /* base3 — warmest white; reads as the "fully lit" row vs base2's listed. */
+  --session-name-open-fg: #fdf6e3;
   --tint-glyph-active: #002b36;     /* base03 */
+  /* Solarized-dark is dark — same white-overlay convention as :root. Same
+     alphas to preserve exact v0.2.7 feel. */
+  --overlay-faint:   rgba(255,255,255,0.03);
+  --overlay-subtle:  rgba(255,255,255,0.04);
+  --overlay-soft:    rgba(255,255,255,0.05);
+  --overlay:         rgba(255,255,255,0.06);
+  --overlay-strong:  rgba(255,255,255,0.08);
+  --overlay-hi:      rgba(255,255,255,0.10);
+  --overlay-hi-2:    rgba(255,255,255,0.12);
+  --overlay-ring:    rgba(255,255,255,0.18);
 }
 
 * {
@@ -168,7 +210,7 @@ button {
 code {
   font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
   font-size: var(--text-sm);
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--overlay);
   padding: 1px 5px;
   border-radius: 3px;
 }
@@ -262,7 +304,7 @@ code {
   min-width: 24px;
   min-height: 24px;
 }
-.icon-btn:hover { color: var(--text); background: rgba(255,255,255,0.06); }
+.icon-btn:hover { color: var(--text); background: var(--overlay); }
 
 .empty-hint {
   padding: 18px 14px;
@@ -288,7 +330,7 @@ code {
 .session:hover {
   background:
     linear-gradient(90deg, color-mix(in srgb, var(--row-tint, var(--accent)) 8%, transparent) 0%, transparent 40%),
-    rgba(255,255,255,0.04);
+    var(--overlay-subtle);
 }
 /* C-3: active row uses the cwd-derived hue rather than the fixed brand
    accent so two sessions on different projects look distinct at a glance. */
@@ -298,7 +340,13 @@ code {
 }
 .session.disabled { cursor: not-allowed; opacity: 0.55; }
 .session.disabled:hover { background: transparent; }
-.session.open .session-name { color: var(--accent-fg); }
+/* Open session: heavier weight + theme-specific brighter/accent fg so the
+   "this row owns an active terminal" cue reads on light and dark alike.
+   Previously used --accent-fg (always #fff) which vanished on light bg. */
+.session.open .session-name {
+  color: var(--session-name-open-fg);
+  font-weight: 600;
+}
 
 .session-name {
   font-weight: 500;
@@ -423,7 +471,7 @@ code {
   transition: background-color 80ms ease-out, opacity 80ms ease-out;
   animation: tabIn 120ms ease-out;
 }
-.tab:hover { background: rgba(255,255,255,0.05); }
+.tab:hover { background: var(--overlay-soft); }
 .tab.active {
   background: var(--tab-active-bg);
   /* C-3: hue derives from the tab's cwd; matches the sidebar row strip. */
@@ -472,7 +520,7 @@ code {
 }
 .tab-close { font-size: 16px; }
 .tab-kill  { font-size: 12px; }
-.tab-close:hover:not(:disabled) { background: rgba(255,255,255,0.1); color: var(--text); }
+.tab-close:hover:not(:disabled) { background: var(--overlay-hi); color: var(--text); }
 .tab-kill:hover:not(:disabled)  { background: rgba(220,80,80,0.18); color: var(--danger); }
 .tab-kill.armed {
   background: rgba(248,113,113,0.18);
@@ -586,7 +634,7 @@ code {
   justify-content: flex-end;
 }
 .btn {
-  background: rgba(255,255,255,0.06);
+  background: var(--overlay);
   border: 1px solid var(--border);
   color: var(--text);
   padding: 6px 12px;
@@ -594,7 +642,7 @@ code {
   cursor: pointer;
   font-size: var(--text-sm);
 }
-.btn:hover { background: rgba(255,255,255,0.12); }
+.btn:hover { background: var(--overlay-hi-2); }
 .btn.primary {
   background: var(--accent);
   border-color: var(--accent);
@@ -658,7 +706,7 @@ code {
   align-items: flex-start;
   justify-content: space-between;
   text-align: left;
-  background: rgba(255,255,255,0.03);
+  background: var(--overlay-faint);
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 14px;
@@ -670,7 +718,7 @@ code {
   font: inherit;
 }
 .welcome-card:hover {
-  background: rgba(255,255,255,0.06);
+  background: var(--overlay);
   border-color: var(--text-faint);
 }
 .welcome-card:active { transform: translateY(1px); }
@@ -679,7 +727,7 @@ code {
   cursor: not-allowed;
 }
 .welcome-card-disabled:hover {
-  background: rgba(255,255,255,0.03);
+  background: var(--overlay-faint);
   border-color: var(--border);
 }
 .welcome-card-disabled:active { transform: none; }
@@ -772,7 +820,7 @@ code {
   border-radius: 3px;
   font-size: var(--text-xs);
 }
-.toast-action:hover { background: rgba(255,255,255,0.08); }
+.toast-action:hover { background: var(--overlay-strong); }
 .toast-close {
   background: transparent;
   border: none;
@@ -784,7 +832,7 @@ code {
   border-radius: 3px;
   min-width: 20px;
 }
-.toast-close:hover { color: var(--text); background: rgba(255,255,255,0.08); }
+.toast-close:hover { color: var(--text); background: var(--overlay-strong); }
 
 /* ---- error boundary --------------------------------------------------- */
 
@@ -817,7 +865,7 @@ code {
   align-items: center;
   justify-content: center;
 }
-.hamburger:hover { background: rgba(255,255,255,0.06); }
+.hamburger:hover { background: var(--overlay); }
 
 .drawer-backdrop {
   display: none;
@@ -866,7 +914,7 @@ code {
 
 .segmented {
   display: flex;
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--overlay-subtle);
   border: 1px solid var(--border);
   border-radius: 4px;
   padding: 2px;
@@ -903,7 +951,7 @@ code {
 .new-session-btn.active {
   color: var(--text);
   border-style: solid;
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--overlay-subtle);
 }
 .new-session-chev { font-size: var(--text-2xs); color: var(--text-faint); }
 
@@ -924,7 +972,7 @@ code {
 .newsession-tabs {
   display: flex;
   gap: 2px;
-  background: rgba(255,255,255,0.04);
+  background: var(--overlay-subtle);
   padding: 2px;
   border-radius: 3px;
 }
@@ -1027,7 +1075,7 @@ code {
   font: inherit;
   font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
   font-size: var(--text-sm);
-  background: rgba(255,255,255,0.04);
+  background: var(--overlay-subtle);
   border: 1px solid var(--border);
   border-radius: 4px;
   color: var(--text);
@@ -1057,7 +1105,7 @@ code {
   display: block;
   width: 100%;
   text-align: left;
-  background: rgba(255,255,255,0.03);
+  background: var(--overlay-faint);
   border: 1px solid var(--border);
   color: var(--text);
   padding: 6px 8px;
@@ -1120,7 +1168,7 @@ code {
 .session-menu-btn:focus-visible {
   opacity: 1;
 }
-.session-menu-btn:hover { color: var(--text); background: rgba(255,255,255,0.08); }
+.session-menu-btn:hover { color: var(--text); background: var(--overlay-strong); }
 
 /* Pending rows: clickable (D-7 spawn flow). Slight dim + the badge tells
    the user opening will create a new PTY rather than reattach. */
@@ -1208,7 +1256,7 @@ code {
   display: inline-block;
   width: 12px;
   height: 12px;
-  border: 2px solid rgba(255,255,255,0.18);
+  border: 2px solid var(--overlay-ring);
   border-top-color: var(--accent);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
@@ -1276,7 +1324,7 @@ code {
   border-radius: 3px;
   max-width: 100%;
 }
-.statusbar-cwd:hover { background: rgba(255,255,255,0.06); color: var(--text); }
+.statusbar-cwd:hover { background: var(--overlay); color: var(--text); }
 .statusbar-cwd-icon {
   color: var(--text-faint);
   margin-right: 4px;
@@ -1351,7 +1399,7 @@ code {
   padding: 2px 5px;
   border-radius: 3px;
 }
-.sidebar-filter-clear:hover { color: var(--text); background: rgba(255,255,255,0.08); }
+.sidebar-filter-clear:hover { color: var(--text); background: var(--overlay-strong); }
 
 /* ---- sidebar resize handle (B-3) ------------------------------------ */
 
@@ -1383,11 +1431,15 @@ code {
 .skeleton-line {
   height: 10px;
   border-radius: 3px;
+  /* Shimmer is a 3-stop gradient over a neutral track. The middle stop is
+     the "highlight"; in light theme the var resolves to a darker tint
+     instead of white, so the shimmer is inverted but still reads as a
+     moving sheen. Counter-review noted: acceptable theme drift. */
   background: linear-gradient(
     90deg,
-    rgba(255,255,255,0.04) 0%,
-    rgba(255,255,255,0.10) 50%,
-    rgba(255,255,255,0.04) 100%
+    var(--overlay-subtle) 0%,
+    var(--overlay-hi) 50%,
+    var(--overlay-subtle) 100%
   );
   background-size: 200% 100%;
   animation: shimmer 1.4s linear infinite;
@@ -1429,7 +1481,7 @@ code {
   font-size: 14px;
   z-index: 6;
 }
-.tabbar-chevron:hover { color: var(--text); background: rgba(255,255,255,0.06); }
+.tabbar-chevron:hover { color: var(--text); background: var(--overlay); }
 
 .tabbar-overflow-menu {
   position: absolute;
@@ -1509,7 +1561,7 @@ code {
 .statusbar kbd {
   font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
   font-size: var(--text-2xs);
-  background: rgba(255,255,255,0.06);
+  background: var(--overlay);
   border: 1px solid var(--border);
   border-radius: 3px;
   padding: 1px 5px;
@@ -1543,7 +1595,7 @@ code {
   gap: 8px;
   padding: 10px 12px;
   border-bottom: 1px solid var(--border);
-  background: rgba(255,255,255,0.02);
+  background: var(--overlay-faint);
 }
 .palette-search-icon {
   color: var(--text-faint);
@@ -1681,7 +1733,7 @@ code {
 }
 .kbd {
   display: inline-block;
-  background: rgba(255,255,255,0.06);
+  background: var(--overlay);
   border: 1px solid var(--border);
   border-bottom-width: 2px;
   border-radius: 3px;
@@ -1901,7 +1953,7 @@ code {
 }
 .sidebar-search-row:hover,
 .sidebar-search-row:focus-visible {
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--overlay-subtle);
   border-color: var(--border);
 }
 .sidebar-search-row.unbound {
