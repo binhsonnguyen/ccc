@@ -40,6 +40,31 @@
   --tint-l: 62%;
   --tint-fg-l: 78%;
   --tint-dim-l: 22%;
+
+  /* Popup / floating surface (palette card, row-menu, cwd dropdown,
+     overlay card, last-frame preview, tabbar overflow, toast). Darker
+     than --bg so cards float above the chrome. */
+  --popup-bg: #1f2227;
+  --popup-bg-alt: #1a1a1d;   /* deeper variant for preview tooltip */
+  --toast-bg: #1a1f26;
+
+  /* Custom scrollbar (B-6). */
+  --scrollbar-thumb: #3a3a3f;
+  --scrollbar-thumb-hover: #4a4a4f;
+
+  /* Hover state for solid accent buttons. */
+  --accent-hover: #2563eb;
+  /* Text on solid --accent background (white reads on all 3 themes). */
+  --accent-fg: #ffffff;
+
+  /* Text on solid --warn background. */
+  --warn-fg: #1a1407;
+
+  /* Bright row-name text on near-dark sidebar bg (was hardcoded #e6ebf1). */
+  --session-name-fg: #e6ebf1;
+  /* Glyph color on tint-coloured chip when row is active (near-black so
+     it stays ≥ 6:1 across the whole hue wheel). */
+  --tint-glyph-active: #0c0c0c;
 }
 
 /* ---- light theme ----------------------------------------------------- */
@@ -62,6 +87,26 @@ html.theme-light {
   --tint-l: 45%;
   --tint-fg-l: 32%;
   --tint-dim-l: 86%;
+
+  /* Popups: near-white, slightly off the page bg so the card edge reads. */
+  --popup-bg: #ffffff;
+  --popup-bg-alt: #f5f5f5;
+  --toast-bg: #ffffff;
+
+  --scrollbar-thumb: #c2c2c5;
+  --scrollbar-thumb-hover: #a8a8ab;
+
+  /* Darker blue than --accent (#1d4ed8) for hover read on light bg. */
+  --accent-hover: #1e40af;
+  --accent-fg: #ffffff;
+
+  /* Text on the (now darker) --warn = #a16207 — white passes AA. */
+  --warn-fg: #ffffff;
+
+  /* On light bg, the session-name uses normal dark text — no override. */
+  --session-name-fg: var(--text);
+  /* Tint at 45% lightness on light bg: near-white glyph contrasts best. */
+  --tint-glyph-active: #ffffff;
 }
 
 /* ---- solarized-dark theme ------------------------------------------- */
@@ -83,6 +128,24 @@ html.theme-solarized-dark {
   --tint-l: 60%;
   --tint-fg-l: 75%;
   --tint-dim-l: 24%;
+
+  /* Solarized palette discipline: base02 / base01 for popup surfaces. */
+  --popup-bg: #073642;       /* base02 */
+  --popup-bg-alt: #052b33;   /* between base03 + base02 for preview */
+  --toast-bg: #073642;
+
+  --scrollbar-thumb: #586e75;       /* base01 */
+  --scrollbar-thumb-hover: #657b83; /* base00 */
+
+  /* Cyan as hover for the solarized accent gives clear contrast shift. */
+  --accent-hover: #2aa198;
+  --accent-fg: #fdf6e3;             /* base3 — warm white reads on solarized blue */
+
+  /* Yellow base16 #b58900 takes near-black foreground (base03). */
+  --warn-fg: #002b36;
+
+  --session-name-fg: #eee8d5;       /* base2 — brightest readable on base02 */
+  --tint-glyph-active: #002b36;     /* base03 */
 }
 
 * {
@@ -115,7 +178,7 @@ code {
    .xterm-viewport which owns its own renderer/scroll hooks. */
 :where(.session-list, .tabbar, .bind-list, .cwd-dropdown, .row-menu, .welcome) {
   scrollbar-width: thin;
-  scrollbar-color: #3a3a3f transparent;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
 }
 :where(.session-list, .tabbar, .bind-list, .cwd-dropdown, .row-menu, .welcome)::-webkit-scrollbar {
   width: 8px;
@@ -126,11 +189,11 @@ code {
   background: transparent;
 }
 :where(.session-list, .tabbar, .bind-list, .cwd-dropdown, .row-menu, .welcome)::-webkit-scrollbar-thumb {
-  background: #3a3a3f;
+  background: var(--scrollbar-thumb);
   border-radius: 4px;
 }
 :where(.session-list, .tabbar, .bind-list, .cwd-dropdown, .row-menu, .welcome)::-webkit-scrollbar-thumb:hover {
-  background: #4a4a4f;
+  background: var(--scrollbar-thumb-hover);
 }
 
 /* ---- focus halo (A7) -------------------------------------------------- */
@@ -235,11 +298,12 @@ code {
 }
 .session.disabled { cursor: not-allowed; opacity: 0.55; }
 .session.disabled:hover { background: transparent; }
-.session.open .session-name { color: #fff; }
+.session.open .session-name { color: var(--accent-fg); }
 
 .session-name {
   font-weight: 500;
-  color: #e6ebf1;
+  /* Brighter than --text on dark themes; falls back to --text in light. */
+  color: var(--session-name-fg);
   font-size: var(--text-base);
   display: flex;
   align-items: center;
@@ -286,7 +350,7 @@ code {
  * instead — it stays ≥ 6:1 across the whole wheel. */
 .session.active .session-monogram {
   background: var(--row-tint, var(--accent));
-  color: #0c0c0c;
+  color: var(--tint-glyph-active);
 }
 /* C-1: per-row activity sparkline. Fixed 24×8 box (6px draw + 2px
  * vertical padding) so the canvas slot doesn't reflow on data change.
@@ -499,7 +563,7 @@ code {
   z-index: 80;
 }
 .overlay-card {
-  background: #1f2227;
+  background: var(--popup-bg);
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 20px 24px;
@@ -535,7 +599,7 @@ code {
   background: var(--accent);
   border-color: var(--accent);
 }
-.btn.primary:hover { background: #2563eb; }
+.btn.primary:hover { background: var(--accent-hover); }
 .btn-sm {
   padding: 3px 8px;
   font-size: var(--text-xs);
@@ -677,7 +741,7 @@ code {
   display: flex;
   align-items: center;
   gap: 8px;
-  background: #1a1f26;
+  background: var(--toast-bg);
   border: 1px solid var(--border);
   border-left-width: 3px;
   padding: 10px 12px;
@@ -911,7 +975,7 @@ code {
   right: 0;
   max-height: 200px;
   overflow-y: auto;
-  background: #1f2227;
+  background: var(--popup-bg);
   border: 1px solid var(--border);
   border-radius: 3px;
   list-style: none;
@@ -1083,7 +1147,7 @@ code {
 /* ---- row menu (D-3) --------------------------------------------------- */
 
 .row-menu {
-  background: #1f2227;
+  background: var(--popup-bg);
   border: 1px solid var(--border);
   border-radius: 4px;
   padding: 4px;
@@ -1372,7 +1436,7 @@ code {
   top: 36px;
   right: 0;
   z-index: 30;
-  background: #1f2227;
+  background: var(--popup-bg);
   border: 1px solid var(--border);
   border-radius: 4px;
   padding: 4px;
@@ -1465,7 +1529,7 @@ code {
   width: 560px;
   max-width: 92vw;
   max-height: 480px;
-  background: #1f2227;
+  background: var(--popup-bg);
   border: 1px solid var(--border);
   border-radius: 8px;
   box-shadow: 0 20px 60px rgba(0,0,0,0.55);
@@ -1518,8 +1582,8 @@ code {
 }
 .palette-item.active {
   background: rgba(59,130,246,0.18);
-  border-left-color: #3b82f6;
-  color: #fff;
+  border-left-color: var(--accent);
+  color: var(--accent-fg);
 }
 .palette-item-main {
   flex: 1;
@@ -1532,7 +1596,7 @@ code {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.palette-item.active .palette-item-label { color: #fff; }
+.palette-item.active .palette-item-label { color: var(--accent-fg); }
 .palette-item-detail {
   font-size: var(--text-xs);
   color: var(--text-faint);
@@ -1559,7 +1623,7 @@ code {
   width: 560px;
   max-width: 92vw;
   max-height: 70vh;
-  background: #1f2227;
+  background: var(--popup-bg);
   border: 1px solid var(--border);
   border-radius: 8px;
   box-shadow: 0 20px 60px rgba(0,0,0,0.55);
@@ -1659,7 +1723,7 @@ code {
 .cheatsheet-theme-btn.is-active {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--accent-fg);
 }
 
 /* C-2 last-frame hover preview. Fixed-positioned tooltip anchored to a
@@ -1673,7 +1737,7 @@ code {
   width: 360px;
   max-height: calc(11px * 1.5 * 9 + 32px);
   overflow: hidden;
-  background: #1a1a1d;
+  background: var(--popup-bg-alt);
   border: 1px solid var(--border);
   border-radius: 6px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
@@ -1763,7 +1827,7 @@ code {
   margin-left: 6px;
   border-radius: 8px;
   background: var(--warn, #d97706);
-  color: #1a1407;
+  color: var(--warn-fg);
   font-size: 10px;
   font-weight: 600;
   line-height: 1;
