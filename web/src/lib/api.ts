@@ -194,6 +194,29 @@ export async function searchSessions(
   };
 }
 
+// uploadImages POSTs one or more image blobs to the server, which writes
+// them under the session's data dir and returns the absolute paths. The
+// caller then injects "@<path> " into the PTY stdin — claude treats the
+// mention exactly like a user-typed @path, so the image flows through
+// claude's normal channel and ends up in the JSONL transcript.
+//
+// Multiple files are uploaded in one request (same "image" field repeated).
+// Server-side ParseMultipartForm handles that natively.
+export async function uploadImages(c3Id: string, files: File[]): Promise<string[]> {
+  if (files.length === 0) return [];
+  const fd = new FormData();
+  for (const f of files) {
+    fd.append('image', f, f.name || 'pasted-image');
+  }
+  const r = await fetch(
+    `/api/sessions/${encodeURIComponent(c3Id)}/upload-image`,
+    { method: 'POST', body: fd },
+  );
+  if (!r.ok) throw await readError(r);
+  const j = (await r.json()) as { paths?: string[] };
+  return j?.paths ?? [];
+}
+
 export function ptyWsURL(c3Id: string): string {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${proto}//${location.host}/api/sessions/${encodeURIComponent(c3Id)}/pty`;

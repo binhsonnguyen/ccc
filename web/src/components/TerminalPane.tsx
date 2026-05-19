@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getOrCreateTerm } from '../lib/terminals';
-import { fetchActivity, ptyWsURL } from '../lib/api';
+import { fetchActivity, ptyWsURL, uploadImages } from '../lib/api';
 import { useShortcut } from '../lib/shortcuts';
 import { stripAnsi } from '../lib/ansi';
 import { countMatches } from '../lib/mention';
@@ -257,6 +257,96 @@ export default function TerminalPane({
       wsBoundRef.current = false;
     };
   }, [tab.claudeUuid, tab.c3Id, openWS]);
+
+  // ---- clipboard image paste + drag-drop -----------------------------
+  // Intercept paste/drop on the terminal host BEFORE xterm sees them.
+  // When the payload contains image blobs, upload to the server (which
+  // writes them under ~/.local/share/c3/<id>/images/) and inject the
+  // returned absolute paths into stdin as `@<path> ` — claude treats
+  // these as normal @mentions and reads the file from disk. Plain-text
+  // pastes fall through to xterm's default handling.
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return;
+
+    const sendStdin = (s: string) => {
+      const entry = getOrCreateTerm(tab.claudeUuid);
+      const ws = entry.ws;
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(new TextEncoder().encode(s));
+      }
+    };
+
+    const collectImages = (dt: DataTransfer | null): File[] => {
+      if (!dt) return [];
+      const out: File[] = [];
+      if (dt.items && dt.items.length > 0) {
+        for (let i = 0; i < dt.items.length; i++) {
+          const it = dt.items[i];
+          if (it.kind === 'file' && it.type.startsWith('image/')) {
+            const f = it.getAsFile();
+            if (f) out.push(f);
+          }
+        }
+      }
+      if (out.length === 0 && dt.files && dt.files.length > 0) {
+        for (let i = 0; i < dt.files.length; i++) {
+          const f = dt.files[i];
+          if (f.type.startsWith('image/')) out.push(f);
+        }
+      }
+      return out;
+    };
+
+    const injectPaths = async (files: File[]) => {
+      try {
+        const paths = await uploadImages(tab.c3Id, files);
+        for (const p of paths) {
+          sendStdin(`@${p} `);
+        }
+      } catch (e) {
+        // Surface in console — a toast plumbed through App is overkill
+        // for a feature that's near-instant on localhost. The user will
+        // notice the missing mention if it ever fails.
+        console.error('c3: image upload failed', e);
+      }
+    };
+
+    const onPaste = (ev: ClipboardEvent) => {
+      const files = collectImages(ev.clipboardData);
+      if (files.length === 0) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      void injectPaths(files);
+    };
+
+    const onDragOver = (ev: DragEvent) => {
+      if (ev.dataTransfer && Array.from(ev.dataTransfer.types).includes('Files')) {
+        ev.preventDefault();
+        ev.dataTransfer.dropEffect = 'copy';
+      }
+    };
+
+    const onDrop = (ev: DragEvent) => {
+      const files = collectImages(ev.dataTransfer);
+      if (files.length === 0) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      void injectPaths(files);
+    };
+
+    // Capture phase so we run before xterm's own paste listener on its
+    // helper textarea. preventDefault + stopPropagation then keeps xterm
+    // from also pasting the (empty) text representation.
+    host.addEventListener('paste', onPaste, true);
+    host.addEventListener('dragover', onDragOver);
+    host.addEventListener('drop', onDrop);
+    return () => {
+      host.removeEventListener('paste', onPaste, true);
+      host.removeEventListener('dragover', onDragOver);
+      host.removeEventListener('drop', onDrop);
+    };
+  }, [tab.c3Id, tab.claudeUuid]);
 
   useEffect(() => {
     if (!visible) return;

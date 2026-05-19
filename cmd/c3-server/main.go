@@ -12,10 +12,13 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"os"
@@ -351,6 +354,11 @@ func routeSession(originHost, originHostAlt string) http.HandlerFunc {
 			handleSessionTail(w, r, id)
 		case "activity":
 			handleSessionActivity(w, r, id)
+		case "upload-image":
+			if !checkSameOrigin(w, r, originHost, originHostAlt) {
+				return
+			}
+			handleUploadImage(w, r, id)
 		default:
 			http.NotFound(w, r)
 		}
@@ -417,6 +425,13 @@ func handleSessionDelete(w http.ResponseWriter, r *http.Request, id string) {
 	if err := usecase.Remove(store, id, force, manager); err != nil {
 		mapUsecaseError(w, err)
 		return
+	}
+	// Tear down per-session data dir (pasted images, etc.). Best-effort —
+	// a leftover dir is benign; logging the failure is enough.
+	if dir, err := sessionDataDir(id); err == nil {
+		if err := os.RemoveAll(dir); err != nil && !os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "c3-server: cleanup %s: %v\n", dir, err)
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -536,6 +551,125 @@ func handleSessionActivity(w http.ResponseWriter, r *http.Request, id string) {
 		"buckets": snap[:],
 		"idleMs":  idleMs,
 	})
+}
+
+// handleUploadImage saves one or more pasted/dragged image blobs to the
+// session's per-id images dir and returns their absolute paths. The web
+// client injects "@<path> " into the PTY stdin so claude sees a normal
+// @mention — keeping us thin-wrapper compliant: the file is real on disk
+// and `claude --resume` outside c3 can read it just the same.
+//
+// No size cap by design (user runs c3 locally; we trust the source).
+// ParseMultipartForm keeps ≤32 MB in memory and spools the rest to a
+// tmpfile, so a huge paste won't OOM the server.
+func handleUploadImage(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		http.Error(w, "invalid multipart: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	files := r.MultipartForm.File["image"]
+	if len(files) == 0 {
+		http.Error(w, "no image files in 'image' field", http.StatusBadRequest)
+		return
+	}
+	f, err := store.Load()
+	if err != nil {
+		httpError(w, err, http.StatusInternalServerError)
+		return
+	}
+	if f.Find(id) == nil {
+		http.NotFound(w, r)
+		return
+	}
+	dir, err := sessionImageDir(id)
+	if err != nil {
+		httpError(w, err, http.StatusInternalServerError)
+		return
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		httpError(w, err, http.StatusInternalServerError)
+		return
+	}
+	paths := make([]string, 0, len(files))
+	for _, fh := range files {
+		name := fmt.Sprintf("image-%s%s", randomToken(8), extForUpload(fh))
+		outPath := filepath.Join(dir, name)
+		if err := saveUpload(fh, outPath); err != nil {
+			httpError(w, err, http.StatusInternalServerError)
+			return
+		}
+		paths = append(paths, outPath)
+	}
+	writeJSON(w, map[string]any{"paths": paths})
+}
+
+func saveUpload(fh *multipart.FileHeader, outPath string) error {
+	src, err := fh.Open()
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+	dst, err := os.Create(outPath)
+	if err != nil {
+		return err
+	}
+	defer dst.Close()
+	_, err = io.Copy(dst, src)
+	return err
+}
+
+func extForUpload(fh *multipart.FileHeader) string {
+	switch fh.Header.Get("Content-Type") {
+	case "image/png":
+		return ".png"
+	case "image/jpeg", "image/jpg":
+		return ".jpg"
+	case "image/gif":
+		return ".gif"
+	case "image/webp":
+		return ".webp"
+	case "image/heic":
+		return ".heic"
+	case "image/svg+xml":
+		return ".svg"
+	}
+	if e := strings.ToLower(filepath.Ext(fh.Filename)); e != "" {
+		return e
+	}
+	return ".bin"
+}
+
+func randomToken(n int) string {
+	b := make([]byte, n)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+// sessionImageDir is the on-disk directory for a session's pasted images:
+// $XDG_DATA_HOME/c3/<id>/images, or ~/.local/share/c3/<id>/images. Same
+// home logic as portFilePath so the lookup is consistent. Exported via
+// SessionImageDir below so core/usecase.Remove can clean it up.
+func sessionImageDir(id string) (string, error) {
+	base, err := sessionDataDir(id)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(base, "images"), nil
+}
+
+func sessionDataDir(id string) (string, error) {
+	if d := os.Getenv("XDG_DATA_HOME"); d != "" {
+		return filepath.Join(d, "c3", id), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".local", "share", "c3", id), nil
 }
 
 // handleClaudeSessions returns the bind dialog's data set: unbound claude
