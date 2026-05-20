@@ -1291,7 +1291,15 @@ code {
   color: var(--text-dim);
   user-select: none;
   gap: 12px;
-  overflow: hidden;
+  /* IMPORTANT: visible (not hidden). The theme pick menu opens upward
+     and is positioned outside this row's box; overflow: hidden would
+     clip it. Inner ellipsis-truncated parts (e.g. .statusbar-cwd) carry
+     their own overflow: hidden so the layout still tames long strings. */
+  overflow: visible;
+  /* Stacking context above .pane-host so the upward-opening theme menu
+     paints above terminal panes. */
+  position: relative;
+  z-index: 5;
 }
 .statusbar-empty {
   /* Was center-only; now also hosts the theme toggle on the right, so
