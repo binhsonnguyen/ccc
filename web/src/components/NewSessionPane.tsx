@@ -12,6 +12,10 @@ interface Props {
     msg: string,
     opts?: { variant?: 'info' | 'error' | 'warning' | 'success' },
   ) => void;
+  // Bumped by App whenever the user clicks "New Claude session" while
+  // this pane is already open. Used as a key on a one-shot border-pulse
+  // overlay so the user sees an acknowledgement rather than a no-op.
+  flashKey?: number;
 }
 
 function basename(p: string): string {
@@ -50,7 +54,7 @@ interface CwdCache {
 }
 let cwdCache: CwdCache | null = null;
 
-export default function NewSessionPane({ onCreated, onCancel, showToast }: Props) {
+export default function NewSessionPane({ onCreated, onCancel, showToast, flashKey }: Props) {
   const [cwd, setCwd] = useState('');
   const [name, setName] = useState('');
   const [nameTouched, setNameTouched] = useState(false);
@@ -157,6 +161,12 @@ export default function NewSessionPane({ onCreated, onCancel, showToast }: Props
   return (
     <div className="newsession-pane" role="region" aria-label="New session">
       <div className="newsession-pane-inner">
+        {/* One-shot pulse overlay: remounted via `key` whenever the user
+          * clicks the sidebar's Claude icon while this pane is already
+          * open. Skipped on initial mount (flashKey starts at 0). */}
+        {flashKey ? (
+          <div key={flashKey} className="form-flash-pulse" aria-hidden="true" />
+        ) : null}
         <header className="newsession-pane-header">
           <h2>New session</h2>
           <p className="newsession-pane-sub">

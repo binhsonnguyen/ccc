@@ -131,8 +131,19 @@ function AppInner() {
   // tab bar / palette / keyboard. Always render NewSessionPane EXCLUSIVE
   // of the terminal panes — never stack both.
   const [creatingSession, setCreatingSession] = useState(false);
+  // Bumped when the user clicks "New Claude session" while the pane is
+  // already open. NewSessionPane uses it as a key on a one-shot border-
+  // pulse overlay so the user gets a "yes I noticed, but it's already
+  // here" visual rather than a silent no-op.
+  const [paneFlashKey, setPaneFlashKey] = useState(0);
   const startCreatingSession = useCallback(() => {
-    setCreatingSession(true);
+    setCreatingSession((wasOpen) => {
+      if (wasOpen) {
+        setPaneFlashKey((k) => k + 1);
+        return true;
+      }
+      return true;
+    });
     setActiveUuid(null);
   }, []);
 
@@ -407,12 +418,17 @@ function AppInner() {
     const key = entry.claudeUuid || entry.id;
     setTabs((prev) => {
       if (prev.some((t) => t.claudeUuid === key || t.c3Id === entry.id)) return prev;
+      const isShell = entry.kind === 'shell';
       const t: Tab = {
         claudeUuid: key,
         c3Id: entry.id,
         name: entry.name || entry.id,
         cwd: entry.cwd || '',
-        status: entry.claudeUuid ? 'connecting' : 'pending',
+        // Shell tabs never sit in the 'pending' state — there is no
+        // claude-side discovery handshake to wait for. They jump from
+        // 'connecting' (set by openWS) straight to 'connected'.
+        status: isShell || entry.claudeUuid ? 'connecting' : 'pending',
+        kind: isShell ? 'shell' : 'claude',
       };
       return [...prev, t];
     });
@@ -486,12 +502,14 @@ function AppInner() {
       const entry = byC3.get(id);
       if (!entry) continue; // silently skip unknown
       const key = entry.claudeUuid || entry.id;
+      const isShell = entry.kind === 'shell';
       toOpen.push({
         claudeUuid: key,
         c3Id: entry.id,
         name: entry.name || entry.id,
         cwd: entry.cwd || '',
-        status: entry.claudeUuid ? 'connecting' : 'pending',
+        status: isShell || entry.claudeUuid ? 'connecting' : 'pending',
+        kind: isShell ? 'shell' : 'claude',
       });
     }
     if (toOpen.length === 0) return;
@@ -749,6 +767,7 @@ function AppInner() {
             }
             startCreatingSession();
           }}
+          onCloseMainPane={() => setCreatingSession(false)}
         />
       </div>
       <main className="workspace">
@@ -776,6 +795,7 @@ function AppInner() {
                 }}
                 onCancel={() => setCreatingSession(false)}
                 showToast={showToast}
+                flashKey={paneFlashKey}
               />
               {tabs.map((tab) => (
                 <TerminalPane

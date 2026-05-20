@@ -44,6 +44,13 @@ const IDLE_THRESHOLD_MS = 30 * 60 * 1000;
 // sidebar's sparkline cadence — server caches nothing per-request, so
 // two clients polling at 2 s is fine.
 const IDLE_POLL_MS = 2000;
+// Window after a user-initiated reconnect during which we drop any
+// {type:"exit"} frame. Covers the server's 5 s grace where it replays
+// the cached exit to a re-attaching client. 500 ms is generous vs the
+// few ms it takes for the WS to reach `connected` and the fresh PTY to
+// start producing bytes; if a *real* exit happens later it'll be well
+// outside the window.
+const EXIT_SUPPRESS_MS = 500;
 
 // humanizeIdle renders a millisecond duration as a compact, English-only
 // "Xh Ym" / "Ym" / "Xs" string. Intentionally tiny — i18n is out of scope
@@ -77,6 +84,14 @@ export default function TerminalPane({
   rowCap,
 }: Props) {
   const { showToast } = useToast();
+
+  // Timestamp of the most recent user-initiated reconnect (Restart shell /
+  // Take over). The ws.onmessage exit handler suppresses {type:"exit"}
+  // frames arriving within EXIT_SUPPRESS_MS of this moment — they are
+  // typically the *cached* exit frame from the server's grace window
+  // (5 s GC), not a fresh exit. Without this the overlay flickers off
+  // → on → stuck after Restart shell.
+  const lastReconnectAtRef = useRef(0);
 
   // True while a file drag is hovering this pane. Drives the drop-target
   // overlay. We count enter/leave events instead of using a single bool
@@ -181,7 +196,15 @@ export default function TerminalPane({
           }
           if (!msg) return;
           if (msg.type === 'kicked') onKicked(uuid);
-          else if (msg.type === 'exit') onExit(uuid, msg.code);
+          else if (msg.type === 'exit') {
+            // Suppress cached exit frames replayed within the server's
+            // grace window right after a user-initiated reconnect.
+            if (Date.now() - lastReconnectAtRef.current < EXIT_SUPPRESS_MS) {
+              /* swallow */
+            } else {
+              onExit(uuid, msg.code);
+            }
+          }
           else if (msg.type === 'error') {
             // Server failed to attach (e.g. claude not in PATH). Surface
             // the real message — ws.onclose will fire right after but the
@@ -426,7 +449,10 @@ export default function TerminalPane({
   }, [colCap, rowCap, visible, tab.claudeUuid, fitAndSync]);
 
   const reconnect = useCallback(
-    () => openWS(tab.claudeUuid, tab.c3Id),
+    () => {
+      lastReconnectAtRef.current = Date.now();
+      openWS(tab.claudeUuid, tab.c3Id);
+    },
     [openWS, tab.claudeUuid, tab.c3Id],
   );
 
@@ -625,13 +651,47 @@ export default function TerminalPane({
       {tab.status === 'exited' && visible && (
         <div className="overlay" role="dialog" aria-modal="true" aria-labelledby={`exited-${tab.claudeUuid}`}>
           <div className="overlay-card">
-            <h2 id={`exited-${tab.claudeUuid}`}>claude exited</h2>
-            <p>Exit code {tab.exitCode ?? '?'}.</p>
-            <div className="overlay-actions">
-              <button ref={primaryBtnRef} className="btn" onClick={() => onClose(tab.claudeUuid)}>
-                Close tab
-              </button>
-            </div>
+            {tab.kind === 'shell' ? (
+              <>
+                <h2 id={`exited-${tab.claudeUuid}`}>
+                  Shell exited (code {tab.exitCode ?? '?'})
+                </h2>
+                <p>
+                  Restart spawns a fresh shell in the same cwd. Scrollback
+                  from the previous session is not preserved.
+                </p>
+                <div className="overlay-actions">
+                  <button
+                    ref={primaryBtnRef}
+                    className="btn primary"
+                    onClick={reconnect}
+                    aria-label="Restart shell"
+                  >
+                    Restart shell
+                  </button>
+                  <button
+                    className="btn"
+                    onClick={() => onClose(tab.claudeUuid)}
+                  >
+                    Close tab
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <h2 id={`exited-${tab.claudeUuid}`}>claude exited</h2>
+                <p>Exit code {tab.exitCode ?? '?'}.</p>
+                <div className="overlay-actions">
+                  <button
+                    ref={primaryBtnRef}
+                    className="btn"
+                    onClick={() => onClose(tab.claudeUuid)}
+                  >
+                    Close tab
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

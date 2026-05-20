@@ -1,8 +1,11 @@
 package ptyrunner
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestAugmentPath_NoPathInEnv(t *testing.T) {
@@ -41,6 +44,68 @@ func TestAugmentPath_PreservesExistingPath(t *testing.T) {
 	// Original entries must still be there.
 	if !strings.HasSuffix(pathLine, ":/usr/bin:/bin") {
 		t.Fatalf("PATH should end with original path; got %s", pathLine)
+	}
+}
+
+// StartShell must not touch ~/.claude/projects/. We point HOME at a temp
+// dir, pre-seed it with a fake project tree (so we'd notice anything
+// new), spawn a shell briefly, then snapshot the directory listing. The
+// only file allowed to appear is the pre-existing one.
+func TestStartShell_DoesNotCreateClaudeJSONL(t *testing.T) {
+	// Use a temp HOME so the test never touches the user's real
+	// ~/.claude/projects/. resolveClaude / augmentPath read HOME via
+	// fallbackBinDirs, which is fine — they only build PATH entries.
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	projectsDir := filepath.Join(tmpHome, ".claude", "projects", "encoded-cwd")
+	if err := os.MkdirAll(projectsDir, 0o755); err != nil {
+		t.Fatalf("mkdir projects: %v", err)
+	}
+	preExisting := filepath.Join(projectsDir, "pre-existing.jsonl")
+	if err := os.WriteFile(preExisting, []byte("{}\n"), 0o644); err != nil {
+		t.Fatalf("seed jsonl: %v", err)
+	}
+
+	cwd := t.TempDir()
+	// argv = nil → default ($SHELL or /bin/bash -i). We force /bin/sh so
+	// the test doesn't depend on the developer's login shell being
+	// installed under HOME=tmp.
+	sess, err := StartShell(cwd, []string{"/bin/sh", "-c", "echo hello"})
+	if err != nil {
+		t.Skipf("StartShell unavailable in this environment: %v", err)
+		return
+	}
+	// Drain briefly and let the child exit on its own.
+	go func() {
+		buf := make([]byte, 1024)
+		for {
+			if _, err := sess.Master.Read(buf); err != nil {
+				return
+			}
+		}
+	}()
+	time.Sleep(200 * time.Millisecond)
+	_ = sess.Kill()
+	_, _ = sess.Wait()
+
+	// Walk ~/.claude/projects and assert only the pre-existing file is there.
+	var found []string
+	root := filepath.Join(tmpHome, ".claude", "projects")
+	if err := filepath.Walk(root, func(p string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+		found = append(found, p)
+		return nil
+	}); err != nil {
+		t.Fatalf("walk: %v", err)
+	}
+	if len(found) != 1 || found[0] != preExisting {
+		t.Fatalf("unexpected files under ~/.claude/projects: %v", found)
 	}
 }
 

@@ -626,6 +626,85 @@ func TestAttach_ResumedNoPendingFrame(t *testing.T) {
 	}
 }
 
+// newFakeShellStarter is the shell-flavoured sibling of newFakePTYStarter:
+// it returns a startShell-compatible func that runs the given command in
+// a pty. Tests use `cat` so the child stays alive without needing a real
+// shell binary.
+func newFakeShellStarter(name string, args ...string) func(cwd string, argv []string) (*ptyrunner.Session, error) {
+	return func(cwd string, _ []string) (*ptyrunner.Session, error) {
+		cmd := exec.Command(name, args...)
+		if cwd != "" {
+			cmd.Dir = cwd
+		}
+		master, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 24, Cols: 80})
+		if err != nil {
+			return nil, err
+		}
+		return &ptyrunner.Session{Master: master, Cmd: cmd}, nil
+	}
+}
+
+// Discovery loop must be inert for shell sessions: even if a new uuid
+// appears in claudefs for the same cwd, the bind hook never fires.
+// Without this gate, a shell tab opened in a claude-active project
+// would silently adopt the next JSONL claude writes there.
+func TestDiscovery_DoesNotFireForShell(t *testing.T) {
+	skipIfNoPTY(t)
+	// Tight loop so the test doesn't drag.
+	origInterval := discoveryIntervalNs.Load()
+	origTimeout := discoveryTimeoutNs.Load()
+	discoveryIntervalNs.Store(int64(10 * time.Millisecond))
+	discoveryTimeoutNs.Store(int64(500 * time.Millisecond))
+	t.Cleanup(func() {
+		discoveryIntervalNs.Store(origInterval)
+		discoveryTimeoutNs.Store(origTimeout)
+	})
+
+	m := New()
+	// startPTY must remain wired (sanity), but the shell branch uses startShell.
+	m.startPTY = newFakePTYStarter("cat")
+	m.startShell = newFakeShellStarter("cat")
+	scanner := &fakeScanner{}
+	m.claudeScan = scanner
+
+	var hookCalls int
+	var hookMu sync.Mutex
+	m.SetUUIDDiscoveredHook(func(_, _ string) {
+		hookMu.Lock()
+		hookCalls++
+		hookMu.Unlock()
+	})
+
+	c := &fakeClient{}
+	sess, err := m.AttachSpec("c3id-shell-1", SpawnSpec{
+		Kind: "shell",
+		CWD:  "/tmp",
+	}, c)
+	if err != nil {
+		t.Fatalf("attach shell: %v", err)
+	}
+	t.Cleanup(func() { _ = sess.Kill() })
+
+	// Plant a synthetic claude JSONL in the same cwd; with the gate
+	// missing this would otherwise fire the bind hook.
+	scanner.set([]core.Session{
+		{UUID: "would-be-bound", CWD: "/tmp"},
+	})
+
+	// Wait beyond the (shortened) discovery timeout. Hook must not fire.
+	time.Sleep(700 * time.Millisecond)
+
+	hookMu.Lock()
+	defer hookMu.Unlock()
+	if hookCalls != 0 {
+		t.Fatalf("shell session triggered discovery hook %d times; want 0", hookCalls)
+	}
+	// And the pending control frame must NOT have been sent.
+	if c.hasControl("pending") {
+		t.Errorf("shell session sent stray pending frame; controls=%v", c.controls)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Activity ring (C-1)
 // ---------------------------------------------------------------------------

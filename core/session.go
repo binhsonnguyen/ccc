@@ -29,7 +29,25 @@ type C3Entry struct {
 	CWD        string    `json:"cwd"`
 	ClaudeUUID string    `json:"claudeUuid"`
 	CreatedAt  time.Time `json:"createdAt"`
+	// Kind discriminates entry type. Empty == legacy "claude" entry (zero
+	// migration on disk: existing archive.json reads back as Kind==""). The
+	// only explicit value today is "shell" — a plain `$SHELL -i` PTY with
+	// no Claude side, no JSONL, no discovery loop. ClaudeUUID is unused
+	// (and must stay empty) for shell entries; the c3-id is the primary
+	// key for life.
+	Kind string `json:"kind,omitempty"`
+	// Command is the exact argv to spawn for a shell entry. nil ⇒ default
+	// ($SHELL -i; /bin/bash -i if SHELL unset). Non-nil and non-empty
+	// overrides argv verbatim. Empty-but-non-nil ([]string{}) is rejected
+	// at write time so the field stays "nil = default, set = use". Ignored
+	// for claude entries.
+	Command []string `json:"command,omitempty"`
 }
+
+// IsShell reports whether this entry is a plain shell (vs. a claude session).
+// Centralises the Kind comparison so the rest of the codebase doesn't have
+// to remember the magic string.
+func (e *C3Entry) IsShell() bool { return e.Kind == "shell" }
 
 type ArchiveFile struct {
 	Version  int       `json:"version"`
@@ -96,6 +114,21 @@ func (f *ArchiveFile) AddEntry(name, cwd, claudeUUID string) C3Entry {
 		CWD:        cwd,
 		ClaudeUUID: claudeUUID,
 		CreatedAt:  time.Now(),
+	}
+	f.Sessions = append(f.Sessions, e)
+	return e
+}
+
+// AddShellEntry appends a new shell c3-session. Argv may be nil (caller
+// wants the default $SHELL -i spawn) but never empty — caller validates.
+func (f *ArchiveFile) AddShellEntry(name, cwd string, argv []string) C3Entry {
+	e := C3Entry{
+		ID:        NewID(),
+		Name:      name,
+		CWD:       cwd,
+		Kind:      "shell",
+		Command:   argv,
+		CreatedAt: time.Now(),
 	}
 	f.Sessions = append(f.Sessions, e)
 	return e

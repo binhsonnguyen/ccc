@@ -182,6 +182,44 @@ func Start(cwd, uuid, firstPrompt string) (*Session, error) {
 	return &Session{Master: master, Cmd: cmd}, nil
 }
 
+// StartShell spawns a plain shell PTY in cwd. argv == nil ⇒ default
+// (`$SHELL -i`; `/bin/bash -i` when SHELL is empty). Non-nil argv is
+// used verbatim; argv[0] is resolved via exec.LookPath. No PATH-fallback
+// scan like resolveClaude — shells are universally on PATH and a custom
+// argv is the user's contract.
+//
+// IMPORTANT: this path must NOT write anything under ~/.claude/projects.
+// We don't touch claudefs from here and we don't pass --session-id to
+// anything; verified by TestStartShell_DoesNotCreateClaudeJSONL.
+func StartShell(cwd string, argv []string) (*Session, error) {
+	if argv == nil {
+		sh := os.Getenv("SHELL")
+		if sh == "" {
+			sh = "/bin/bash"
+		}
+		argv = []string{sh, "-i"}
+	}
+	if len(argv) == 0 {
+		return nil, fmt.Errorf("ptyrunner: empty argv")
+	}
+	bin, err := exec.LookPath(argv[0])
+	if err != nil {
+		return nil, fmt.Errorf("ptyrunner: shell %q not found: %w", argv[0], err)
+	}
+	cmd := exec.Command(bin, argv[1:]...)
+	cmd.Dir = cwd
+	env := os.Environ()
+	env = append(env, "TERM=xterm-256color")
+	env = augmentPath(env)
+	cmd.Env = env
+
+	master, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 24, Cols: 80})
+	if err != nil {
+		return nil, fmt.Errorf("ptyrunner: start shell: %w", err)
+	}
+	return &Session{Master: master, Cmd: cmd}, nil
+}
+
 // Resize sends TIOCSWINSZ to the PTY. cols/rows = 0 is silently ignored to
 // avoid wedging the child with a zero-size terminal during transient
 // browser resizes.

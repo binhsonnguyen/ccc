@@ -333,6 +333,11 @@ export default function TabBar({ tabs, activeUuid, onSelect, onClose, onKill, on
             title={`${t.name} — ${t.cwd}`}
           >
             <span className={`tab-status status-${t.status}`} aria-hidden="true" />
+            {t.kind === 'shell' && (
+              <span className="tab-kind-badge" aria-label="shell tab" title="shell tab">
+                sh
+              </span>
+            )}
             <span className="tab-name">{t.name}</span>
             {!isActive && t.mentions && t.mentions > 0 ? (
               <span

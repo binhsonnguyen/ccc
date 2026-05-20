@@ -1039,29 +1039,106 @@ code {
   color: var(--text);
 }
 
-.new-session-btn {
-  background: transparent;
-  border: 1px dashed var(--border);
-  color: var(--text-dim);
-  padding: 5px 10px;
-  border-radius: 4px;
-  font-size: var(--text-sm);
-  cursor: pointer;
+/* Sidebar "new tab" 3-icon strip (Claude / Shell / Bind). Glyph-only;
+   tooltip via CSS data-tooltip so keyboard focus shows it too (the
+   native `title` attribute doesn't fire on focus). No .active state —
+   the form/main-pane that opens already communicates "I am open", and
+   keeping an icon highlighted asymmetrically (Claude opens elsewhere)
+   was confusing. */
+.sidebar-kind-icons {
+  display: flex;
+  gap: 6px;
+  margin-top: 10px; /* breathing room from the search input above */
+  /* Don't span the full sidebar width — buttons cluster at the start so
+     future icons (file-nav, ssh, split, …) can join the row without it
+     reflowing every existing button. */
+  justify-content: flex-start;
+}
+.sidebar-kind-icon {
+  /* Intrinsic size, not flex-grow — keeps each button compact and stable
+     as the row gains/loses siblings. */
+  flex: 0 0 auto;
+  width: 36px;
+  position: relative;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-}
-.new-session-btn:hover { color: var(--text); border-color: var(--text-faint); }
-.new-session-btn.active {
-  color: var(--text);
-  border-style: solid;
+  justify-content: center;
   background: var(--overlay-subtle);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  height: 30px;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: background 80ms ease-out, color 80ms ease-out, border-color 80ms ease-out;
 }
-.new-session-chev { font-size: var(--text-2xs); color: var(--text-faint); }
+.sidebar-kind-icon:hover {
+  color: var(--text);
+  border-color: var(--text-faint);
+  background: color-mix(in srgb, var(--accent) 10%, var(--overlay-subtle));
+}
+.sidebar-kind-icon:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.sidebar-kind-icon-glyph {
+  font-size: 15px;
+  line-height: 1;
+  font-feature-settings: normal;
+}
+
+/* One-shot border pulse — used when the user re-clicks a "new tab" icon
+   whose form/pane is already open. Mounted inside an existing
+   position:relative container (NewSessionPane card or NewSessionForm
+   inline form); React remounts it via `key` to retrigger the animation. */
+.form-flash-pulse {
+  position: absolute;
+  inset: -3px;
+  border: 2px solid var(--accent);
+  border-radius: 6px;
+  pointer-events: none;
+  opacity: 0;
+  animation: form-flash-pulse-anim 600ms ease-out;
+  z-index: 30;
+}
+@keyframes form-flash-pulse-anim {
+  0%   { opacity: 0; transform: scale(1.03); }
+  25%  { opacity: 1; transform: scale(1); }
+  100% { opacity: 0; transform: scale(1); }
+}
+
+/* CSS tooltip — appears on hover or keyboard focus. Replaces the
+   `title` attribute which has no keyboard/touch story. */
+.sidebar-kind-icon[data-tooltip] {
+  /* relative positioning provided above */
+}
+.sidebar-kind-icon[data-tooltip]::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--popup-bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 3px 8px;
+  border-radius: 3px;
+  font-size: var(--text-xs);
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 80ms ease-out 200ms; /* small delay so it doesn't flash on drive-by */
+  z-index: 20;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+}
+.sidebar-kind-icon[data-tooltip]:hover::after,
+.sidebar-kind-icon[data-tooltip]:focus-visible::after {
+  opacity: 1;
+}
 
 /* ---- new-session form ------------------------------------------------ */
 
 .newsession-form {
+  position: relative; /* anchor for .form-flash-pulse overlay */
   background: var(--overlay-strong);
   border: 1px solid var(--border);
   border-radius: 4px;
@@ -1072,47 +1149,6 @@ code {
 }
 .newsession-form.is-drawer { background: transparent; border: none; padding: 0; }
 .newsession-modal { min-width: min(420px, 86vw); max-width: 92vw; padding: 14px; }
-
-/* Icon picker for new-session kind (replaces .newsession-tabs).
-   Forward-compatible for a 3rd Shell icon. */
-.newsession-icons {
-  display: flex;
-  gap: 6px;
-  margin-bottom: 8px;
-}
-.newsession-icon {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  background: var(--overlay-subtle);
-  border: 1px solid transparent;
-  color: var(--text-dim);
-  font-size: var(--text-xs);
-  padding: 8px 6px 6px;
-  border-radius: 4px;
-  cursor: pointer;
-  transition: background 80ms ease-out, color 80ms ease-out, border-color 80ms ease-out;
-}
-.newsession-icon:hover {
-  color: var(--text);
-  background: color-mix(in srgb, var(--accent) 8%, var(--overlay-subtle));
-}
-.newsession-icon.active {
-  background: var(--tab-bg);
-  color: var(--text);
-  border-color: var(--accent);
-}
-.newsession-icon-glyph {
-  font-size: 18px;
-  line-height: 1;
-  font-feature-settings: normal;
-}
-.newsession-icon-label {
-  font-size: var(--text-xs);
-  letter-spacing: 0.02em;
-}
 
 .newsession-body { display: flex; flex-direction: column; gap: 8px; }
 
@@ -2028,6 +2064,21 @@ code {
   transition: opacity 200ms ease-out;
 }
 
+/* Kind badge in the tab strip — same role as sidebar's `[sh]` badge.
+   Mirrors the sidebar's neutral tone (not warn-tinted like .badge). */
+.tab-kind-badge {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: var(--ls-uppercase);
+  background: color-mix(in srgb, var(--text-dim) 18%, transparent);
+  color: var(--text-dim);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-weight: 600;
+  line-height: 1;
+  flex: 0 0 auto;
+}
+
 /* ---- C-5 mention badge ---------------------------------------------- */
 
 .tab-mentions {
@@ -2165,6 +2216,7 @@ code {
   background: var(--bg);
 }
 .newsession-pane-inner {
+  position: relative; /* anchor for .form-flash-pulse overlay */
   width: 100%;
   max-width: 640px;
   display: flex;
@@ -2216,22 +2268,6 @@ code {
   justify-content: flex-end;
   gap: 8px;
   margin-top: 4px;
-}
-
-.bind-existing-btn {
-  background: transparent;
-  border: 1px dashed var(--border);
-  color: var(--text-dim);
-  font-size: var(--text-xs);
-  padding: 4px 8px;
-  border-radius: 3px;
-  cursor: pointer;
-  margin-top: 4px;
-  align-self: flex-start;
-}
-.bind-existing-btn:hover {
-  color: var(--text);
-  border-color: var(--accent);
 }
 
 /* ---- PTY dims read-out button (status bar) ---------------------------- */
