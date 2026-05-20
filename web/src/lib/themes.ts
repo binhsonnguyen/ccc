@@ -15,7 +15,7 @@ import { allUuids, getTerm } from './terminals';
 export type ThemeName = 'dark' | 'light' | 'solarized-dark' | 'hc-dark' | 'hc-light' | 'solarized-light';
 
 export const THEME_NAMES: readonly ThemeName[] = [
-  'dark', 'light', 'solarized-dark', 'hc-dark', 'hc-light', 'solarized-light',
+  'dark', 'light', 'hc-dark', 'hc-light', 'solarized-dark', 'solarized-light',
 ] as const;
 
 const LS_KEY = 'c3:theme';
