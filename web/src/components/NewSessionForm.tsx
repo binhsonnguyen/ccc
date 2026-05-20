@@ -218,24 +218,44 @@ export default function NewSessionForm({ drawer, initialMode, onCancel, onCreate
 
   const body = (
     <div ref={rootRef} className={'newsession-form' + (drawer ? ' is-drawer' : '')}>
-      <div className="newsession-tabs" role="tablist" aria-label="New session mode">
+      {/* Icon picker for tab kind. Replaces the v0.2.x "New | Bind existing"
+        * text-tab strip. Forward-compatible: a third "Shell" icon will land
+        * once the plain-terminal feature ships (PR-B). ←/→ navigate, Enter
+        * activates. */}
+      <div
+        className="newsession-icons"
+        role="tablist"
+        aria-label="New session kind"
+        onKeyDown={(e) => {
+          if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+            e.preventDefault();
+            setMode((m) => (m === 'new' ? 'bind' : 'new'));
+          }
+        }}
+      >
         <button
           type="button"
           role="tab"
           aria-selected={mode === 'new'}
-          className={'newsession-tab' + (mode === 'new' ? ' active' : '')}
+          tabIndex={mode === 'new' ? 0 : -1}
+          className={'newsession-icon' + (mode === 'new' ? ' active' : '')}
           onClick={() => setMode('new')}
+          title="New Claude session"
         >
-          New
+          <span className="newsession-icon-glyph" aria-hidden="true">✦</span>
+          <span className="newsession-icon-label">Claude</span>
         </button>
         <button
           type="button"
           role="tab"
           aria-selected={mode === 'bind'}
-          className={'newsession-tab' + (mode === 'bind' ? ' active' : '')}
+          tabIndex={mode === 'bind' ? 0 : -1}
+          className={'newsession-icon' + (mode === 'bind' ? ' active' : '')}
           onClick={() => setMode('bind')}
+          title="Adopt an existing Claude session by uuid"
         >
-          Bind existing
+          <span className="newsession-icon-glyph" aria-hidden="true">⛓</span>
+          <span className="newsession-icon-label">Bind</span>
         </button>
       </div>
 

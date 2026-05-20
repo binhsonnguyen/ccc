@@ -1073,26 +1073,45 @@ code {
 .newsession-form.is-drawer { background: transparent; border: none; padding: 0; }
 .newsession-modal { min-width: min(420px, 86vw); max-width: 92vw; padding: 14px; }
 
-.newsession-tabs {
+/* Icon picker for new-session kind (replaces .newsession-tabs).
+   Forward-compatible for a 3rd Shell icon. */
+.newsession-icons {
   display: flex;
-  gap: 2px;
-  background: var(--overlay-subtle);
-  padding: 2px;
-  border-radius: 3px;
+  gap: 6px;
+  margin-bottom: 8px;
 }
-.newsession-tab {
+.newsession-icon {
   flex: 1;
-  background: transparent;
-  border: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  background: var(--overlay-subtle);
+  border: 1px solid transparent;
   color: var(--text-dim);
   font-size: var(--text-xs);
-  padding: 4px 0;
-  border-radius: 2px;
+  padding: 8px 6px 6px;
+  border-radius: 4px;
   cursor: pointer;
+  transition: background 80ms ease-out, color 80ms ease-out, border-color 80ms ease-out;
 }
-.newsession-tab.active {
+.newsession-icon:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 8%, var(--overlay-subtle));
+}
+.newsession-icon.active {
   background: var(--tab-bg);
   color: var(--text);
+  border-color: var(--accent);
+}
+.newsession-icon-glyph {
+  font-size: 18px;
+  line-height: 1;
+  font-feature-settings: normal;
+}
+.newsession-icon-label {
+  font-size: var(--text-xs);
+  letter-spacing: 0.02em;
 }
 
 .newsession-body { display: flex; flex-direction: column; gap: 8px; }
