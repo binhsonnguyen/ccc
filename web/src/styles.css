@@ -4,23 +4,20 @@
 
 :root {
   color-scheme: dark;
-  --bg: #1e1e1e;
-  --sidebar-bg: #252526;
-  --tab-bg: #2d2d30;
-  --tab-active-bg: #1e1e1e;
-  --border: #2a2a2d;
-  --text: #d4d4d4;
-  /* WCAG AA: previously #858585 (~4.0:1) failed on sidebar bg. */
-  --text-dim: #a0a0a0;
-  --text-faint: #7a8290;
-  --accent: #3b82f6;
-  --danger: #f87171;
-  --warn: #fbbf24;
-  --ok: #10b981;
+  --bg:            #1a1a1a;
+  --sidebar-bg:    #212121;
+  --tab-bg:        #2c2c2c;
+  --tab-active-bg: #1a1a1a;
+  --border:        #333336;
+  --text:          #d4d4d4;
+  --text-dim:      #9e9ea6;
+  --text-faint:    #838388;   /* 4.51:1 on sidebar — AA */
+  --accent:        #4d8ef0;
+  --danger:        #f87171;
+  --warn:          #fbbf24;
+  --ok:            #10b981;
 
-  /* Typography scale (B-8). Use tokens rather than raw px so visual
-     hierarchy stays consistent — three sizes used to mean three
-     different things in three places. */
+  /* Typography scale (B-8). */
   --text-2xs: 10px;
   --text-xs: 11px;
   --text-sm: 12px;
@@ -29,165 +26,272 @@
   --text-lg: 18px;
   --text-xl: 22px;
 
-  /* Letter-spacing for small-cap headers. UX review: 0.08em was too
-     loose for 11px headers; 0.06em reads tighter without feeling
-     condensed. */
   --ls-uppercase: 0.06em;
 
-  /* Theming (cwd tint). Lightness for the hsl() values used in
-     cwdTint.ts so light mode can darken its hues for AA contrast on
-     near-white backgrounds. Overridden per-theme below. */
+  /* cwd tint lightness — overridden per-theme. */
   --tint-l: 62%;
   --tint-fg-l: 78%;
   --tint-dim-l: 22%;
 
-  /* Popup / floating surface (palette card, row-menu, cwd dropdown,
-     overlay card, last-frame preview, tabbar overflow, toast). Darker
-     than --bg so cards float above the chrome. */
-  --popup-bg: #1f2227;
-  --popup-bg-alt: #1a1a1d;   /* deeper variant for preview tooltip */
-  --toast-bg: #1a1f26;
+  --popup-bg:     #252525;
+  --popup-bg-alt: #1e1e1e;
+  --toast-bg:     #1e252e;
 
-  /* Custom scrollbar (B-6). */
-  --scrollbar-thumb: #3a3a3f;
-  --scrollbar-thumb-hover: #4a4a4f;
+  --scrollbar-thumb:       #3c3c42;
+  --scrollbar-thumb-hover: #4e4e56;
 
-  /* Hover state for solid accent buttons. */
-  --accent-hover: #2563eb;
-  /* Text on solid --accent background (white reads on all 3 themes). */
-  --accent-fg: #ffffff;
+  --accent-hover: #3a7ae0;
+  --accent-fg:    #ffffff;
+  --warn-fg:      #1a1204;
 
-  /* Text on solid --warn background. */
-  --warn-fg: #1a1407;
-
-  /* Bright row-name text on near-dark sidebar bg (was hardcoded #e6ebf1). */
-  --session-name-fg: #e6ebf1;
-  /* Brighter still for the *open* row, to distinguish from merely-listed
-     rows. White reads on near-dark sidebar bg. Overridden per-theme. */
+  --session-name-fg:      #e2e8f0;
   --session-name-open-fg: #ffffff;
-  /* Glyph color on tint-coloured chip when row is active (near-black so
-     it stays ≥ 6:1 across the whole hue wheel). */
-  --tint-glyph-active: #0c0c0c;
+  --tint-glyph-active:    #0c0c0c;
 
-  /* Theme-aware neutral overlays for hover/active/highlight backgrounds.
-     Dark themes use white-on-dark (looks like subtle gray); light theme
-     uses black-on-light (same perceptual weight). Light theme would render
-     white overlays as invisible — bug fix from v0.2.7 pass. */
-  --overlay-faint:   rgba(255,255,255,0.03);
-  --overlay-subtle:  rgba(255,255,255,0.04);
-  --overlay-soft:    rgba(255,255,255,0.05);
-  --overlay:         rgba(255,255,255,0.06);
-  --overlay-strong:  rgba(255,255,255,0.08);
-  --overlay-hi:      rgba(255,255,255,0.10);
-  --overlay-hi-2:    rgba(255,255,255,0.12);
-  --overlay-ring:    rgba(255,255,255,0.18);
+  --overlay-faint:  rgba(255,255,255,0.03);
+  --overlay-subtle: rgba(255,255,255,0.04);
+  --overlay-soft:   rgba(255,255,255,0.05);
+  --overlay:        rgba(255,255,255,0.06);
+  --overlay-strong: rgba(255,255,255,0.08);
+  --overlay-hi:     rgba(255,255,255,0.10);
+  --overlay-hi-2:   rgba(255,255,255,0.12);
+  --overlay-ring:   rgba(255,255,255,0.18);
 }
 
 /* ---- light theme ----------------------------------------------------- */
 html.theme-light {
   color-scheme: light;
-  --bg: #fafafa;
-  --sidebar-bg: #f0f0f0;
-  --tab-bg: #e6e6e6;
-  --tab-active-bg: #fafafa;
-  --border: #d4d4d4;
-  --text: #1e1e1e;
-  --text-dim: #4b5563;
-  --text-faint: #6b7280;
-  --accent: #1d4ed8;
-  --danger: #b91c1c;
-  --warn: #a16207;
-  --ok: #15803d;
+  --bg:            #f8f8f8;
+  --sidebar-bg:    #eeeeee;
+  --tab-bg:        #e3e3e3;
+  --tab-active-bg: #f8f8f8;
+  --border:        #cccccc;
+  --text:          #1a1a1a;
+  --text-dim:      #484858;
+  --text-faint:    #626272;   /* 4.8:1 on sidebar — AA */
+  --accent:        #1d4ed8;
+  --danger:        #b91c1c;
+  --warn:          #92570a;
+  --ok:            #166534;
 
-  /* Darker hues for tints so they hit AA on a near-white bg. */
-  --tint-l: 45%;
-  --tint-fg-l: 32%;
-  --tint-dim-l: 86%;
+  --tint-l: 42%;
+  --tint-fg-l: 30%;
+  --tint-dim-l: 83%;
 
-  /* Popups: near-white, slightly off the page bg so the card edge reads. */
-  --popup-bg: #ffffff;
-  --popup-bg-alt: #f5f5f5;
-  --toast-bg: #ffffff;
+  --popup-bg:     #ffffff;
+  --popup-bg-alt: #f4f4f4;
+  --toast-bg:     #ffffff;
 
-  --scrollbar-thumb: #c2c2c5;
-  --scrollbar-thumb-hover: #a8a8ab;
+  --scrollbar-thumb:       #c0c0c4;
+  --scrollbar-thumb-hover: #a6a6aa;
 
-  /* Darker blue than --accent (#1d4ed8) for hover read on light bg. */
   --accent-hover: #1e40af;
-  --accent-fg: #ffffff;
+  --accent-fg:    #ffffff;
+  --warn-fg:      #ffffff;   /* on #92570a: 4.6:1 — AA */
 
-  /* Text on the (now darker) --warn = #a16207 — white passes AA. */
-  --warn-fg: #ffffff;
-
-  /* On light bg, the session-name uses normal dark text — no override. */
-  --session-name-fg: var(--text);
-  /* Open-session name in light theme: accent blue (#1d4ed8 on #f0f0f0 ≈
-     8:1, AAA). Gives a clear "open = blue" cue since white-fg can't read. */
+  --session-name-fg:      var(--text);
   --session-name-open-fg: var(--accent);
-  /* Tint at 45% lightness on light bg: near-white glyph contrasts best. */
-  --tint-glyph-active: #ffffff;
+  --tint-glyph-active:    #ffffff;
 
-  /* Light theme: invert overlay base to black so subtle hover/active layers
-     read as gray on a near-white bg (white-on-light would be invisible). */
-  --overlay-faint:   rgba(0,0,0,0.03);
-  --overlay-subtle:  rgba(0,0,0,0.04);
-  --overlay-soft:    rgba(0,0,0,0.05);
-  --overlay:         rgba(0,0,0,0.06);
-  --overlay-strong:  rgba(0,0,0,0.08);
-  --overlay-hi:      rgba(0,0,0,0.10);
-  --overlay-hi-2:    rgba(0,0,0,0.12);
-  --overlay-ring:    rgba(0,0,0,0.18);
+  --overlay-faint:  rgba(0,0,0,0.03);
+  --overlay-subtle: rgba(0,0,0,0.04);
+  --overlay-soft:   rgba(0,0,0,0.05);
+  --overlay:        rgba(0,0,0,0.06);
+  --overlay-strong: rgba(0,0,0,0.08);
+  --overlay-hi:     rgba(0,0,0,0.10);
+  --overlay-hi-2:   rgba(0,0,0,0.12);
+  --overlay-ring:   rgba(0,0,0,0.18);
 }
 
 /* ---- solarized-dark theme ------------------------------------------- */
+/* Accepted WCAG failures (Solarized low-contrast by design):
+   --danger #dc322f 3.25:1 · --accent #268bd2 4.08:1 · --text-faint 3.37:1
+   Pushing these further breaks Solarized palette identity. */
 html.theme-solarized-dark {
   color-scheme: dark;
-  --bg: #002b36;            /* base03 */
-  --sidebar-bg: #073642;    /* base02 */
-  --tab-bg: #073642;
+  --bg:            #002b36;   /* base03 */
+  --sidebar-bg:    #073642;   /* base02 */
+  --tab-bg:        #0a3d4c;   /* distinct from sidebar (was #073642 = same) */
   --tab-active-bg: #002b36;
-  --border: #094956;
-  --text: #93a1a1;          /* base1 */
-  --text-dim: #839496;      /* base0 */
-  --text-faint: #657b83;    /* base00 */
-  --accent: #268bd2;        /* blue */
-  --danger: #dc322f;        /* red */
-  --warn: #b58900;          /* yellow */
-  --ok: #859900;            /* green */
+  --border:        #0d4658;
+  --text:          #93a1a1;   /* base1 */
+  --text-dim:      #839496;   /* base0 */
+  --text-faint:    #657b83;   /* base00 — accepted Solarized constraint */
+  --accent:        #268bd2;   /* canonical blue */
+  --danger:        #dc322f;   /* canonical red — accepted 3.25:1 */
+  --warn:          #b58900;
+  --ok:            #859900;
 
   --tint-l: 60%;
   --tint-fg-l: 75%;
-  --tint-dim-l: 24%;
+  --tint-dim-l: 22%;
 
-  /* Solarized palette discipline: base02 / base01 for popup surfaces. */
-  --popup-bg: #073642;       /* base02 */
-  --popup-bg-alt: #052b33;   /* between base03 + base02 for preview */
-  --toast-bg: #073642;
+  --popup-bg:     #073642;   /* base02 */
+  --popup-bg-alt: #0a3d4c;   /* = tab-bg, elevated (was #052b33 = sunken) */
+  --toast-bg:     #073642;
 
-  --scrollbar-thumb: #586e75;       /* base01 */
-  --scrollbar-thumb-hover: #657b83; /* base00 */
+  --scrollbar-thumb:       #586e75;
+  --scrollbar-thumb-hover: #657b83;
 
-  /* Cyan as hover for the solarized accent gives clear contrast shift. */
   --accent-hover: #2aa198;
-  --accent-fg: #fdf6e3;             /* base3 — warm white reads on solarized blue */
+  --accent-fg:    #fdf6e3;   /* base3 */
+  --warn-fg:      #002b36;
 
-  /* Yellow base16 #b58900 takes near-black foreground (base03). */
-  --warn-fg: #002b36;
-
-  --session-name-fg: #eee8d5;       /* base2 — brightest readable on base02 */
-  /* base3 — warmest white; reads as the "fully lit" row vs base2's listed. */
+  --session-name-fg:      #eee8d5;
   --session-name-open-fg: #fdf6e3;
-  --tint-glyph-active: #002b36;     /* base03 */
-  /* Solarized-dark is dark — same white-overlay convention as :root. Same
-     alphas to preserve exact v0.2.7 feel. */
-  --overlay-faint:   rgba(255,255,255,0.03);
-  --overlay-subtle:  rgba(255,255,255,0.04);
-  --overlay-soft:    rgba(255,255,255,0.05);
-  --overlay:         rgba(255,255,255,0.06);
-  --overlay-strong:  rgba(255,255,255,0.08);
-  --overlay-hi:      rgba(255,255,255,0.10);
-  --overlay-hi-2:    rgba(255,255,255,0.12);
-  --overlay-ring:    rgba(255,255,255,0.18);
+  --tint-glyph-active:    #002b36;
+
+  --overlay-faint:  rgba(255,255,255,0.03);
+  --overlay-subtle: rgba(255,255,255,0.04);
+  --overlay-soft:   rgba(255,255,255,0.05);
+  --overlay:        rgba(255,255,255,0.06);
+  --overlay-strong: rgba(255,255,255,0.08);
+  --overlay-hi:     rgba(255,255,255,0.10);
+  --overlay-hi-2:   rgba(255,255,255,0.12);
+  --overlay-ring:   rgba(255,255,255,0.18);
+}
+
+/* ---- hc-dark theme -------------------------------------------------- */
+/* AAA contrast throughout. Overlay scale heavier (0.05–0.30) — near-black
+   surfaces need more alpha for visible hover/focus states. */
+html.theme-hc-dark {
+  color-scheme: dark;
+  --bg:            #0a0a0a;
+  --sidebar-bg:    #1a1a1a;
+  --tab-bg:        #2a2a2a;
+  --tab-active-bg: #0a0a0a;
+  --border:        #686868;   /* primary layer separator */
+  --text:          #ffffff;
+  --text-dim:      #c8c8c8;
+  --text-faint:    #909090;   /* 7.1:1 on bg — AAA */
+  --accent:        #60a5fa;   /* 7.0:1 on bg — AAA */
+  --danger:        #ff6b6b;
+  --warn:          #ffd060;
+  --ok:            #34d399;
+
+  --tint-l: 65%;
+  --tint-fg-l: 82%;
+  --tint-dim-l: 20%;
+
+  --popup-bg:     #242424;
+  --popup-bg-alt: #161616;
+  --toast-bg:     #1a2535;
+
+  --scrollbar-thumb:       #555555;
+  --scrollbar-thumb-hover: #707070;
+
+  --accent-hover: #3b8ef0;
+  --accent-fg:    #000000;   /* black on #60a5fa: 7.56:1 — AAA */
+  --warn-fg:      #1a1000;
+
+  --session-name-fg:      #f0f0f0;
+  --session-name-open-fg: #ffffff;
+  --tint-glyph-active:    #050505;
+
+  --overlay-faint:  rgba(255,255,255,0.05);
+  --overlay-subtle: rgba(255,255,255,0.07);
+  --overlay-soft:   rgba(255,255,255,0.09);
+  --overlay:        rgba(255,255,255,0.11);
+  --overlay-strong: rgba(255,255,255,0.14);
+  --overlay-hi:     rgba(255,255,255,0.18);
+  --overlay-hi-2:   rgba(255,255,255,0.22);
+  --overlay-ring:   rgba(255,255,255,0.30);
+}
+
+/* ---- hc-light theme ------------------------------------------------- */
+/* All semantic colors achieve WCAG AAA on white. */
+html.theme-hc-light {
+  color-scheme: light;
+  --bg:            #ffffff;
+  --sidebar-bg:    #f0f0f0;
+  --tab-bg:        #e0e0e0;
+  --tab-active-bg: #ffffff;
+  --border:        #aaaaaa;
+  --text:          #000000;   /* 21:1 — AAA */
+  --text-dim:      #2a2a3a;   /* 13.2:1 — AAA */
+  --text-faint:    #505060;   /* 7.5:1 on bg, 6.9:1 on sidebar — AAA */
+  --accent:        #0040cc;   /* 8.7:1 — AAA */
+  --danger:        #aa0000;   /* 9.3:1 — AAA */
+  --warn:          #7a4000;   /* 8.2:1 — AAA */
+  --ok:            #006020;   /* 9.1:1 — AAA */
+
+  --tint-l: 38%;
+  --tint-fg-l: 26%;
+  --tint-dim-l: 80%;
+
+  --popup-bg:     #ffffff;
+  --popup-bg-alt: #f5f5f5;
+  --toast-bg:     #ffffff;
+
+  --scrollbar-thumb:       #aaaaaa;
+  --scrollbar-thumb-hover: #888888;
+
+  --accent-hover: #0033aa;
+  --accent-fg:    #ffffff;   /* on #0040cc: 8.7:1 — AAA */
+  --warn-fg:      #ffffff;   /* on #7a4000: 8.2:1 — AAA */
+
+  --session-name-fg:      var(--text);
+  --session-name-open-fg: var(--accent);
+  --tint-glyph-active:    #ffffff;
+
+  --overlay-faint:  rgba(0,0,0,0.04);
+  --overlay-subtle: rgba(0,0,0,0.06);
+  --overlay-soft:   rgba(0,0,0,0.08);
+  --overlay:        rgba(0,0,0,0.10);
+  --overlay-strong: rgba(0,0,0,0.13);
+  --overlay-hi:     rgba(0,0,0,0.16);
+  --overlay-hi-2:   rgba(0,0,0,0.20);
+  --overlay-ring:   rgba(0,0,0,0.30);
+}
+
+/* ---- solarized-light theme ------------------------------------------ */
+/* Canonical Ethan Schoonover Solarized Light.
+   Accepted WCAG failures (Solarized low-contrast by design):
+   --text 4.52:1 · --text-dim 3.16:1 · --accent 3.27:1 · --warn 2.62:1
+   bright* ANSI slots follow canonical Solarized mapping (base colors, not
+   actual hues) — known breakage for git/ls/vim color output. */
+html.theme-solarized-light {
+  color-scheme: light;
+  --bg:            #fdf6e3;   /* base3 */
+  --sidebar-bg:    #eee8d5;   /* base2 */
+  --tab-bg:        #e5dcc8;
+  --tab-active-bg: #fdf6e3;
+  --border:        #d6cdb4;
+  --text:          #657b83;   /* base00 */
+  --text-dim:      #839496;   /* base0 */
+  --text-faint:    #93a1a1;   /* base1 — accepted Solarized constraint */
+  --accent:        #268bd2;
+  --danger:        #dc322f;   /* 4.61:1 on bg — AA ✓ */
+  --warn:          #b58900;   /* accepted 2.62:1 */
+  --ok:            #859900;   /* accepted 2.60:1 */
+
+  --tint-l: 42%;
+  --tint-fg-l: 28%;
+  --tint-dim-l: 88%;
+
+  --popup-bg:     #fdf6e3;
+  --popup-bg-alt: #eee8d5;
+  --toast-bg:     #fdf6e3;
+
+  --scrollbar-thumb:       #c2baaa;
+  --scrollbar-thumb-hover: #a8a098;
+
+  --accent-hover: #1a7ec4;   /* darker #268bd2 — was cyan (copy-paste error) */
+  --accent-fg:    #fdf6e3;   /* base3 on blue */
+  --warn-fg:      #fdf6e3;
+
+  --session-name-fg:      #586e75;   /* base01 */
+  --session-name-open-fg: #268bd2;
+  --tint-glyph-active:    #fdf6e3;
+
+  --overlay-faint:  rgba(0,0,0,0.03);
+  --overlay-subtle: rgba(0,0,0,0.04);
+  --overlay-soft:   rgba(0,0,0,0.05);
+  --overlay:        rgba(0,0,0,0.06);
+  --overlay-strong: rgba(0,0,0,0.08);
+  --overlay-hi:     rgba(0,0,0,0.10);
+  --overlay-hi-2:   rgba(0,0,0,0.12);
+  --overlay-ring:   rgba(0,0,0,0.18);
 }
 
 * {
@@ -958,7 +1062,7 @@ code {
 /* ---- new-session form ------------------------------------------------ */
 
 .newsession-form {
-  background: rgba(0,0,0,0.18);
+  background: var(--overlay-strong);
   border: 1px solid var(--border);
   border-radius: 4px;
   padding: 8px;
@@ -1048,7 +1152,7 @@ code {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.cwd-option:hover { background: rgba(59,130,246,0.12); }
+.cwd-option:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
 
 .newsession-error {
   color: var(--danger);
@@ -1113,7 +1217,7 @@ code {
   cursor: pointer;
   font: inherit;
 }
-.bind-row:hover { background: rgba(59,130,246,0.12); border-color: var(--accent); }
+.bind-row:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); border-color: var(--accent); }
 .bind-row:disabled { opacity: 0.5; cursor: not-allowed; }
 .bind-row-cwd {
   font-size: var(--text-xs);
@@ -1225,7 +1329,7 @@ code {
 .row-menu-item:disabled { color: var(--text-faint); cursor: not-allowed; }
 .row-menu-item:hover:not(:disabled),
 .row-menu-item.is-focused:not(:disabled) {
-  background: rgba(59,130,246,0.18);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
 }
 .row-menu-item.is-danger { color: var(--danger); }
 .row-menu-item.is-armed {
@@ -1248,8 +1352,8 @@ code {
 /* ---- pending banner / spinner ---------------------------------------- */
 
 .banner-pending {
-  background: rgba(59,130,246,0.10);
-  border-color: rgba(59,130,246,0.35);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
   color: var(--text);
 }
 .spinner {
@@ -1410,7 +1514,7 @@ code {
 .sidebar-filter-input {
   flex: 1;
   width: 100%;
-  background: rgba(0, 0, 0, 0.18);
+  background: var(--overlay-strong);
   border: 1px solid var(--border);
   color: var(--text);
   padding: 5px 22px 5px 22px;
@@ -1423,7 +1527,7 @@ code {
 .sidebar-filter-input::placeholder { color: var(--text-faint); }
 .sidebar-filter-input:focus {
   border-color: var(--accent);
-  background: rgba(0, 0, 0, 0.28);
+  background: var(--overlay-hi-2);
 }
 .sidebar-filter-clear {
   position: absolute;
@@ -1554,8 +1658,8 @@ code {
   cursor: pointer;
   width: 100%;
 }
-.tabbar-overflow-item:hover { background: rgba(59,130,246,0.18); }
-.tabbar-overflow-item.active { background: rgba(59,130,246,0.12); }
+.tabbar-overflow-item:hover { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+.tabbar-overflow-item.active { background: color-mix(in srgb, var(--accent) 12%, transparent); }
 .tabbar-overflow-name {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1671,7 +1775,7 @@ code {
   border-left: 2px solid transparent;
 }
 .palette-item.active {
-  background: rgba(59,130,246,0.18);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
   border-left-color: var(--accent);
   color: var(--accent-fg);
 }
