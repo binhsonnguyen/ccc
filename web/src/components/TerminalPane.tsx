@@ -5,6 +5,7 @@ import { useShortcut } from '../lib/shortcuts';
 import { stripAnsi } from '../lib/ansi';
 import { countMatches } from '../lib/mention';
 import { paneId, tabId } from './TabBar';
+import { useToast } from './Toast';
 import type { ControlMsg, Tab, TabStatus } from '../types';
 
 interface Props {
@@ -75,6 +76,16 @@ export default function TerminalPane({
   colCap,
   rowCap,
 }: Props) {
+  const { showToast } = useToast();
+
+  // True while a file drag is hovering this pane. Drives the drop-target
+  // overlay. We count enter/leave events instead of using a single bool
+  // because dragenter/leave fire on every child during traversal — a
+  // bare bool would flicker. The counter goes to 0 when the drag truly
+  // leaves the host.
+  const dragDepthRef = useRef(0);
+  const [dragActive, setDragActive] = useState(false);
+
   // Refs mirror caps so callbacks captured by stale closures (ws.onopen,
   // ResizeObserver) always read the latest values without re-binding.
   const colCapRef = useRef(colCap);
@@ -328,12 +339,22 @@ export default function TerminalPane({
         for (const p of paths) {
           sendStdin(`@${p} `);
         }
+        const n = paths.length;
+        showToast(n === 1 ? 'Added 1 image' : `Added ${n} images`, {
+          variant: 'success',
+        });
       } catch (e) {
-        // Surface in console — a toast plumbed through App is overkill
-        // for a feature that's near-instant on localhost. The user will
-        // notice the missing mention if it ever fails.
+        const msg = e instanceof Error ? e.message : String(e);
         console.error('c3: image upload failed', e);
+        showToast(`Image upload failed — ${msg}`, { variant: 'error' });
       }
+    };
+
+    const hasFileDrag = (dt: DataTransfer | null): boolean => {
+      if (!dt) return false;
+      // `types` is a DOMStringList in some browsers, array in others.
+      // Array.from normalises and avoids includes() being unavailable.
+      return Array.from(dt.types).includes('Files');
     };
 
     const onPaste = (ev: ClipboardEvent) => {
@@ -344,14 +365,29 @@ export default function TerminalPane({
       void injectPaths(files);
     };
 
+    const onDragEnter = (ev: DragEvent) => {
+      if (!hasFileDrag(ev.dataTransfer)) return;
+      dragDepthRef.current += 1;
+      if (dragDepthRef.current === 1) setDragActive(true);
+    };
+
     const onDragOver = (ev: DragEvent) => {
-      if (ev.dataTransfer && Array.from(ev.dataTransfer.types).includes('Files')) {
-        ev.preventDefault();
-        ev.dataTransfer.dropEffect = 'copy';
-      }
+      if (!hasFileDrag(ev.dataTransfer)) return;
+      ev.preventDefault();
+      ev.dataTransfer!.dropEffect = 'copy';
+    };
+
+    const onDragLeave = (ev: DragEvent) => {
+      if (!hasFileDrag(ev.dataTransfer)) return;
+      dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+      if (dragDepthRef.current === 0) setDragActive(false);
     };
 
     const onDrop = (ev: DragEvent) => {
+      // Always reset overlay state on drop — even when no images so the
+      // visual cue clears.
+      dragDepthRef.current = 0;
+      setDragActive(false);
       const files = collectImages(ev.dataTransfer);
       if (files.length === 0) return;
       ev.preventDefault();
@@ -363,14 +399,18 @@ export default function TerminalPane({
     // helper textarea. preventDefault + stopPropagation then keeps xterm
     // from also pasting the (empty) text representation.
     host.addEventListener('paste', onPaste, true);
+    host.addEventListener('dragenter', onDragEnter);
     host.addEventListener('dragover', onDragOver);
+    host.addEventListener('dragleave', onDragLeave);
     host.addEventListener('drop', onDrop);
     return () => {
       host.removeEventListener('paste', onPaste, true);
+      host.removeEventListener('dragenter', onDragEnter);
       host.removeEventListener('dragover', onDragOver);
+      host.removeEventListener('dragleave', onDragLeave);
       host.removeEventListener('drop', onDrop);
     };
-  }, [tab.c3Id, tab.claudeUuid]);
+  }, [tab.c3Id, tab.claudeUuid, showToast]);
 
   useEffect(() => {
     if (!visible) return;
@@ -556,7 +596,13 @@ export default function TerminalPane({
           </button>
         </div>
       )}
-      <div className="pane-host-inner" ref={hostRef} />
+      <div className="pane-host-inner" ref={hostRef}>
+        {dragActive && (
+          <div className="drop-target" aria-hidden="true">
+            <div className="drop-target-text">Drop image to attach</div>
+          </div>
+        )}
+      </div>
       {tab.status === 'kicked' && visible && (
         <div className="overlay" role="dialog" aria-modal="true" aria-labelledby={`kicked-${tab.claudeUuid}`}>
           <div className="overlay-card">

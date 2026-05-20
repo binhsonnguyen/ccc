@@ -2250,6 +2250,39 @@ button.statusbar-dims:focus-visible {
    would require pushing xterm-screen via JS-computed padding; not
    worth the complexity yet. */
 
+/* ---- drag-drop target overlay (image attach) -------------------------- */
+
+/* Sits above the xterm canvas, full-bleed inside .pane-host-inner. Only
+   rendered while a file drag is hovering — see TerminalPane dragDepthRef.
+   pointer-events:none lets dragover/drop continue reaching the host. */
+.pane-host-inner { position: relative; }
+.drop-target {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  border: 2px dashed var(--accent);
+  border-radius: 6px;
+  z-index: 5;
+  animation: drop-target-fade-in 120ms ease-out;
+}
+.drop-target-text {
+  background: var(--popup-bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 8px 16px;
+  border-radius: 4px;
+  font-size: var(--text-sm);
+  box-shadow: 0 4px 18px rgba(0,0,0,0.35);
+}
+@keyframes drop-target-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
 /* ---- generic modal (used by PtyDimsDialog) ---------------------------- */
 
 .modal-backdrop {
