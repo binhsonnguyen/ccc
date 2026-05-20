@@ -18,9 +18,12 @@ interface Props {
 // Per-theme glyph + human label for the cycle button. Glyphs picked to
 // be visually distinct: sun (light), moon (dark), half-moon (solarized).
 const THEME_META: Record<ThemeName, { glyph: string; label: string }> = {
-  dark: { glyph: '☾', label: 'Dark' },
-  light: { glyph: '☀', label: 'Light' },
-  'solarized-dark': { glyph: '◐', label: 'Solarized' },
+  dark:              { glyph: '☾', label: 'Dark' },
+  light:             { glyph: '☀', label: 'Light' },
+  'solarized-dark':  { glyph: '◐', label: 'Solarized Dark' },
+  'hc-dark':         { glyph: '◉', label: 'High Contrast Dark' },
+  'hc-light':        { glyph: '◎', label: 'High Contrast Light' },
+  'solarized-light': { glyph: '◑', label: 'Solarized Light' },
 };
 
 // ThemeToggle opens a small popup menu listing the three themes with a
