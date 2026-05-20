@@ -25,9 +25,9 @@ interface Props {
 const THEME_OPTIONS: Array<{ name: ThemeName; label: string }> = [
   { name: 'dark',             label: 'Dark' },
   { name: 'light',            label: 'Light' },
-  { name: 'solarized-dark',   label: 'Solarized Dark' },
   { name: 'hc-dark',          label: 'HC Dark' },
   { name: 'hc-light',         label: 'HC Light' },
+  { name: 'solarized-dark',   label: 'Solarized Dark' },
   { name: 'solarized-light',  label: 'Solarized Light' },
 ];
 

@@ -20,9 +20,9 @@ interface Props {
 const THEME_META: Record<ThemeName, { glyph: string; label: string }> = {
   dark:              { glyph: '☾', label: 'Dark' },
   light:             { glyph: '☀', label: 'Light' },
-  'solarized-dark':  { glyph: '◐', label: 'Solarized Dark' },
   'hc-dark':         { glyph: '◉', label: 'High Contrast Dark' },
   'hc-light':        { glyph: '◎', label: 'High Contrast Light' },
+  'solarized-dark':  { glyph: '◐', label: 'Solarized Dark' },
   'solarized-light': { glyph: '◑', label: 'Solarized Light' },
 };
 

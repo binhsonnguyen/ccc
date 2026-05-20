@@ -261,9 +261,9 @@ export default function Palette({
         [
           { name: 'dark' as const,             label: 'Theme: Dark' },
           { name: 'light' as const,            label: 'Theme: Light' },
-          { name: 'solarized-dark' as const,   label: 'Theme: Solarized Dark' },
           { name: 'hc-dark' as const,          label: 'Theme: High Contrast Dark' },
           { name: 'hc-light' as const,         label: 'Theme: High Contrast Light' },
+          { name: 'solarized-dark' as const,   label: 'Theme: Solarized Dark' },
           { name: 'solarized-light' as const,  label: 'Theme: Solarized Light' },
         ]
           .filter((t) => t.name !== themeName)
