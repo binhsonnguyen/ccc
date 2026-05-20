@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { formatKeys } from '../lib/shortcuts';
 import { getTerm } from '../lib/terminals';
+import { THEME_NAMES, type ThemeName } from '../lib/themes';
 import type { Tab, TabStatus } from '../types';
 
 interface Props {
@@ -10,6 +11,44 @@ interface Props {
   // right dims right away on tab switch instead of waiting up to 1 s.
   pulse: number;
   onCopyCwd: (cwd: string) => void;
+  themeName: ThemeName;
+  onThemeChange: (n: ThemeName) => void;
+}
+
+// Per-theme glyph + human label for the cycle button. Glyphs picked to
+// be visually distinct: sun (light), moon (dark), half-moon (solarized).
+const THEME_META: Record<ThemeName, { glyph: string; label: string }> = {
+  dark: { glyph: '☾', label: 'Dark' },
+  light: { glyph: '☀', label: 'Light' },
+  'solarized-dark': { glyph: '◐', label: 'Solarized' },
+};
+
+// ThemeToggle cycles dark → light → solarized → dark. Rendered in both
+// the full and empty status bar so it's reachable even on the Welcome
+// screen (no active tab). Click-only global control; the palette and
+// cheatsheet remain the keyboard paths.
+function ThemeToggle({
+  themeName,
+  onThemeChange,
+}: {
+  themeName: ThemeName;
+  onThemeChange: (n: ThemeName) => void;
+}) {
+  const meta = THEME_META[themeName];
+  const idx = THEME_NAMES.indexOf(themeName);
+  const next = THEME_NAMES[(idx + 1) % THEME_NAMES.length];
+  return (
+    <button
+      type="button"
+      className="statusbar-theme"
+      onClick={() => onThemeChange(next)}
+      title={`Theme: ${meta.label} — click for ${THEME_META[next].label}`}
+      aria-label={`Theme: ${meta.label}. Click to switch to ${THEME_META[next].label}.`}
+    >
+      <span className="statusbar-theme-glyph" aria-hidden="true">{meta.glyph}</span>
+      {meta.label}
+    </button>
+  );
 }
 
 // Smart truncate: homedir → ~, then middle-ellipsis if still > maxLen.
@@ -60,7 +99,7 @@ const STATE_LABEL: Record<TabStatus, string> = {
   error: 'error',
 };
 
-export default function StatusBar({ activeTab, pulse, onCopyCwd }: Props) {
+export default function StatusBar({ activeTab, pulse, onCopyCwd, themeName, onThemeChange }: Props) {
   // 1 Hz tick drives both the dims read-out and idle counter without
   // forcing a render every WS frame. Cheap and keeps the bar quiet.
   const [, setTick] = useState(0);
@@ -90,7 +129,10 @@ export default function StatusBar({ activeTab, pulse, onCopyCwd }: Props) {
   if (!activeTab) {
     return (
       <footer className="statusbar statusbar-empty" aria-label="Status bar">
-        No active tab
+        <span className="statusbar-empty-label">No active tab</span>
+        <div className="statusbar-right">
+          <ThemeToggle themeName={themeName} onThemeChange={onThemeChange} />
+        </div>
       </footer>
     );
   }
@@ -157,6 +199,8 @@ export default function StatusBar({ activeTab, pulse, onCopyCwd }: Props) {
         <kbd title="Command palette (coming soon)">
           {formatKeys('Mod+k')}
         </kbd>
+        <span className="statusbar-sep" aria-hidden="true">·</span>
+        <ThemeToggle themeName={themeName} onThemeChange={onThemeChange} />
       </div>
     </footer>
   );

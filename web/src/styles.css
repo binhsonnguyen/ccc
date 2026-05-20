@@ -1294,10 +1294,30 @@ code {
   overflow: hidden;
 }
 .statusbar-empty {
-  justify-content: center;
+  /* Was center-only; now also hosts the theme toggle on the right, so
+     spread the label and the toggle apart. */
+  justify-content: space-between;
   color: var(--text-faint);
+}
+.statusbar-empty-label {
   font-style: italic;
 }
+/* Theme cycle button. Mirrors the .statusbar-cwd affordance: borderless,
+   dim until hover, small glyph + label. */
+.statusbar-theme {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font: inherit;
+  cursor: pointer;
+  padding: 1px 4px;
+  border-radius: 4px;
+}
+.statusbar-theme:hover { color: var(--text); background: var(--overlay); }
+.statusbar-theme-glyph { font-size: 12px; line-height: 1; }
 .statusbar-left,
 .statusbar-center,
 .statusbar-right {

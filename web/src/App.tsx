@@ -812,6 +812,8 @@ function AppInner() {
             <StatusBar
               activeTab={active}
               pulse={pulse}
+              themeName={themeName}
+              onThemeChange={onThemeChange}
               onCopyCwd={(cwd) => {
                 if (!cwd) return;
                 // Clipboard requires a secure context. Loopback HTTP
