@@ -25,6 +25,13 @@ interface Props {
   // active uuid through props — we also early-return below to skip the
   // decode entirely when this pane is visible).
   onMention: (uuid: string, delta: number) => void;
+  // Global PTY dim caps. null = follow viewport. When set, we clamp the
+  // xterm grid via term.resize() after FitAddon computes viewport dims,
+  // then send the clamped values to the server. The xterm element keeps
+  // its host-spanning size so the vertical scrollbar stays at the pane's
+  // right edge; the grid simply doesn't render past `cap` columns.
+  colCap: number | null;
+  rowCap: number | null;
 }
 
 // Threshold beyond which we surface the "session idle" banner. 30 minutes
@@ -65,7 +72,41 @@ export default function TerminalPane({
   onError,
   onClose,
   onMention,
+  colCap,
+  rowCap,
 }: Props) {
+  // Refs mirror caps so callbacks captured by stale closures (ws.onopen,
+  // ResizeObserver) always read the latest values without re-binding.
+  const colCapRef = useRef(colCap);
+  const rowCapRef = useRef(rowCap);
+  useEffect(() => { colCapRef.current = colCap; }, [colCap]);
+  useEffect(() => { rowCapRef.current = rowCap; }, [rowCap]);
+
+  // fitAndSync: run FitAddon, clamp grid via term.resize() against the
+  // current caps, and ship the resulting dims to the server when they
+  // differ from the last sent values. Single funnel so ws.onopen, the
+  // ResizeObserver, the visibility effect, and the caps-changed effect
+  // all behave identically.
+  const fitAndSync = useCallback((uuid: string) => {
+    const entry = getOrCreateTerm(uuid);
+    try { entry.fit.fit(); } catch { /* container may be 0x0 */ }
+    const natCols = entry.term.cols;
+    const natRows = entry.term.rows;
+    const cc = colCapRef.current;
+    const rc = rowCapRef.current;
+    const cols = cc != null && natCols > cc ? cc : natCols;
+    const rows = rc != null && natRows > rc ? rc : natRows;
+    if (cols !== natCols || rows !== natRows) {
+      try { entry.term.resize(cols, rows); } catch { /* ignore */ }
+    }
+    if (cols === entry.lastCols && rows === entry.lastRows) return;
+    entry.lastCols = cols;
+    entry.lastRows = rows;
+    const ws = entry.ws;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'resize', cols, rows }));
+    }
+  }, []);
   const hostRef = useRef<HTMLDivElement | null>(null);
   const primaryBtnRef = useRef<HTMLButtonElement | null>(null);
   // visibleRef mirrors `visible` so the WS onmessage handler (captured
@@ -112,16 +153,12 @@ export default function TerminalPane({
 
       ws.onopen = () => {
         onStatus(uuid, 'connected');
-        try {
-          entry.fit.fit();
-        } catch {
-          /* ignore */
-        }
-        const cols = entry.term.cols;
-        const rows = entry.term.rows;
-        entry.lastCols = cols;
-        entry.lastRows = rows;
-        ws.send(JSON.stringify({ type: 'resize', cols, rows }));
+        // Reset lastCols/Rows so fitAndSync is guaranteed to ship the
+        // initial dims (otherwise a reconnect with unchanged size would
+        // skip the resize frame).
+        entry.lastCols = -1;
+        entry.lastRows = -1;
+        fitAndSync(uuid);
       };
       ws.onmessage = (ev) => {
         if (typeof ev.data === 'string') {
@@ -186,7 +223,7 @@ export default function TerminalPane({
       };
       ws.onerror = () => onStatus(uuid, 'error');
     },
-    [onStatus, onKicked, onExit, onPending, onReady, onError, onMention],
+    [onStatus, onKicked, onExit, onPending, onReady, onError, onMention, fitAndSync],
   );
 
   useEffect(() => {
@@ -217,22 +254,9 @@ export default function TerminalPane({
     });
 
     const ro = new ResizeObserver(() => {
-      try {
-        entry.fit.fit();
-      } catch {
-        /* ignore */
-      }
       if (entry.resizeTimer) window.clearTimeout(entry.resizeTimer);
       entry.resizeTimer = window.setTimeout(() => {
-        const cols = entry.term.cols;
-        const rows = entry.term.rows;
-        if (cols === entry.lastCols && rows === entry.lastRows) return;
-        entry.lastCols = cols;
-        entry.lastRows = rows;
-        const ws = entry.ws;
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: 'resize', cols, rows }));
-        }
+        fitAndSync(tab.claudeUuid);
       }, 80);
     });
     ro.observe(host);
@@ -350,22 +374,16 @@ export default function TerminalPane({
 
   useEffect(() => {
     if (!visible) return;
-    const entry = getOrCreateTerm(tab.claudeUuid);
-    try {
-      entry.fit.fit();
-    } catch {
-      /* ignore */
-    }
-    const cols = entry.term.cols;
-    const rows = entry.term.rows;
-    if (cols === entry.lastCols && rows === entry.lastRows) return;
-    entry.lastCols = cols;
-    entry.lastRows = rows;
-    const ws = entry.ws;
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'resize', cols, rows }));
-    }
-  }, [visible, tab.claudeUuid]);
+    fitAndSync(tab.claudeUuid);
+  }, [visible, tab.claudeUuid, fitAndSync]);
+
+  // Caps change → re-fit + re-resize + ship new dims. fit() is
+  // idempotent and lastCols/Rows gate the ws send, so nothing is wasted
+  // if the grid didn't actually move.
+  useEffect(() => {
+    if (!visible) return;
+    fitAndSync(tab.claudeUuid);
+  }, [colCap, rowCap, visible, tab.claudeUuid, fitAndSync]);
 
   const reconnect = useCallback(
     () => openWS(tab.claudeUuid, tab.c3Id),

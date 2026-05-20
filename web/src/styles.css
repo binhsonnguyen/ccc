@@ -2214,3 +2214,123 @@ code {
   color: var(--text);
   border-color: var(--accent);
 }
+
+/* ---- PTY dims read-out button (status bar) ---------------------------- */
+
+/* .statusbar-dims is now a <button> — reset native chrome so it still
+   looks like the plain mono read-out it always was. Hover/focus give a
+   subtle cue that it's interactive. */
+button.statusbar-dims {
+  background: transparent;
+  border: 0;
+  padding: 1px 4px;
+  margin: 0;
+  border-radius: 3px;
+  cursor: pointer;
+  font: inherit;
+  font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+  font-feature-settings: 'tnum';
+  font-size: var(--text-xs);
+  color: var(--text-dim);
+}
+button.statusbar-dims:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+button.statusbar-dims:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* When colCap < viewport: term.resize() shrinks the grid so claude only
+   writes `cap` cols. The .xterm element itself still spans the host
+   width (per .pane .xterm height:100% / flex defaults), so the
+   scrollbar sits at the host's right edge — not at the cap line —
+   while content renders at the left. Tradeoff: no centering. Adding it
+   would require pushing xterm-screen via JS-computed padding; not
+   worth the complexity yet. */
+
+/* ---- generic modal (used by PtyDimsDialog) ---------------------------- */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+.modal-card {
+  background: var(--popup-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 18px 22px;
+  min-width: 360px;
+  max-width: 460px;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.4);
+  color: var(--text);
+}
+.modal-title {
+  margin: 0 0 6px;
+  font-size: var(--text-md);
+}
+.modal-help {
+  margin: 0 0 14px;
+  color: var(--text-dim);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+.modal-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 14px;
+}
+
+/* ---- dims dialog rows ------------------------------------------------- */
+
+.dims-dialog fieldset.dims-row {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 8px 12px 10px;
+  margin: 0 0 10px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+}
+.dims-dialog fieldset.dims-row legend {
+  padding: 0 4px;
+  font-size: var(--text-xs);
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.dims-radio {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+.dims-input {
+  width: 64px;
+  padding: 3px 6px;
+  margin-left: 4px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text);
+  font: inherit;
+  font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+}
+.dims-input:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.dims-hint {
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+  margin-left: auto;
+}
