@@ -51,6 +51,11 @@ interface Props {
   // (mounted via the openNewSessionTick path) because it's the only
   // remaining caller of the new/bind two-tab UI here.
   onRequestCreate?: () => void;
+  // Close the main-pane NewSessionPane if it's open. Called when the user
+  // clicks Shell/Bind icons so they don't end up with two new-tab UIs
+  // visible (NewSessionPane in main + inline form in sidebar). Symmetric
+  // with the Claude icon's own setCreating(false).
+  onCloseMainPane?: () => void;
   // B-3: width control. App owns the value (persists to localStorage),
   // Sidebar owns the drag interaction.
   width: number;
@@ -155,6 +160,7 @@ export default function Sidebar({
   showToast,
   openNewSessionTick,
   onRequestCreate,
+  onCloseMainPane,
   width,
   onWidthChange,
   resizable,
@@ -249,7 +255,11 @@ export default function Sidebar({
   // 'bind' so the user lands directly on the existing-uuid picker.
   // (New-session creation moved to the main pane.) NewSessionForm
   // reads this via initialMode and defaults to 'new' when unset.
-  const [creatingMode, setCreatingMode] = useState<'new' | 'bind'>('new');
+  const [creatingMode, setCreatingMode] = useState<'new' | 'shell' | 'bind'>('new');
+  // Bumped when the user clicks a sidebar icon whose form is already
+  // open. NewSessionForm uses it as a key on a one-shot pulse overlay
+  // (mirrors the App-level paneFlashKey for the Claude/main-pane case).
+  const [inlineFlashKey, setInlineFlashKey] = useState(0);
   // Effect-driven: Welcome's "New" card increments the tick and we
   // open the form. Skip the initial mount (tick=0 baseline) so this
   // doesn't pop the form open on first render.
@@ -454,7 +464,9 @@ export default function Sidebar({
       try {
         await removeSession(s.id, wasLive);
         showToast(`Removed ${s.name || s.id}`, { variant: 'info' });
-        if (s.claudeUuid) onCloseTabFor(s.claudeUuid);
+        // Shell entries use c3 id as the tab key (no claudeUuid).
+        const closeKey = s.kind === 'shell' ? s.id : s.claudeUuid;
+        if (closeKey) onCloseTabFor(closeKey);
         onAfterMutate();
       } catch (err) {
         if (err instanceof ApiError && err.status === 409) {
@@ -463,7 +475,9 @@ export default function Sidebar({
           try {
             await removeSession(s.id, true);
             showToast(`Removed ${s.name || s.id} (force)`, { variant: 'warning' });
-            if (s.claudeUuid) onCloseTabFor(s.claudeUuid);
+            // Shell entries use c3 id as the tab key (no claudeUuid).
+        const closeKey = s.kind === 'shell' ? s.id : s.claudeUuid;
+        if (closeKey) onCloseTabFor(closeKey);
             onAfterMutate();
             return;
           } catch (err2) {
@@ -509,8 +523,9 @@ export default function Sidebar({
 
   const buildMenu = useCallback(
     (s: C3Entry): MenuItem[] => {
-      const isOpen = !!s.claudeUuid && openSet.has(s.claudeUuid);
-      const pending = !s.claudeUuid;
+      const tabKey = s.kind === 'shell' ? s.id : s.claudeUuid;
+      const isOpen = !!tabKey && openSet.has(tabKey);
+      const pending = !s.claudeUuid && s.kind !== 'shell';
       const archived = view === 'archived';
       return [
         {
@@ -911,50 +926,78 @@ export default function Sidebar({
           )}
         </div>
 
-        <button
-          type="button"
-          className={'new-session-btn' + (creating ? ' active' : '')}
-          onClick={() => {
-            // Default behavior: hand off to App's main-pane new-session
-            // pane (inline first-prompt flow). If no handler is wired
-            // (e.g. an old caller), fall back to toggling the inline
-            // form so the button still does *something* useful.
-            if (onRequestCreate) {
-              onRequestCreate();
-              return;
-            }
-            setCreating((v) => !v);
-          }}
-          aria-expanded={creating}
-        >
-          <span>+ New session</span>
-          {!onRequestCreate && (
-            <span className="new-session-chev" aria-hidden="true">
-              {creating ? '▴' : '▾'}
-            </span>
-          )}
-        </button>
-
-        {/* Compact secondary action: opens the inline form in Bind
-            mode. Kept here (rather than promoted to the main pane)
-            because Bind is a rarer "I already have a Claude uuid"
-            workflow and the picker UI fits neatly in the sidebar. */}
-        {onRequestCreate && !creating && (
+        {/* Three-icon "new tab" strip — replaces the v0.2.x "+ New session"
+          * primary button + "Bind existing…" secondary. Each icon is a
+          * direct entrypoint for one tab kind: Claude (modern first-prompt
+          * flow in main pane), Shell (plain $SHELL -i, inline form), Bind
+          * (adopt existing Claude uuid, inline form). Same row, equal weight. */}
+        <div className="sidebar-kind-icons" role="group" aria-label="New tab">
           <button
             type="button"
-            className="bind-existing-btn"
+            className="sidebar-kind-icon"
             onClick={() => {
+              // Claude goes to the main-pane NewSessionPane (modern inline
+              // first-prompt flow). Close any open sidebar form first so
+              // the user doesn't end up with two new-tab UIs visible at
+              // the same time (Bind/Shell form below + NewSessionPane in
+              // main). Fallback toggles the legacy inline form if no
+              // handler is wired.
+              setCreating(false);
+              if (onRequestCreate) {
+                onRequestCreate();
+                return;
+              }
+              setCreatingMode('new');
+              setCreating(true);
+            }}
+            aria-label="New Claude session"
+            data-tooltip="New Claude session"
+          >
+            <span className="sidebar-kind-icon-glyph" aria-hidden="true">✦</span>
+          </button>
+          <button
+            type="button"
+            className="sidebar-kind-icon"
+            onClick={() => {
+              if (creating && creatingMode === 'shell') {
+                setInlineFlashKey((k) => k + 1);
+                return;
+              }
+              onCloseMainPane?.(); // symmetric with Claude icon's setCreating(false)
+              setCreatingMode('shell');
+              setCreating(true);
+            }}
+            aria-label="New shell tab"
+            data-tooltip="New shell tab"
+          >
+            <span className="sidebar-kind-icon-glyph" aria-hidden="true">$_</span>
+          </button>
+          <button
+            type="button"
+            className="sidebar-kind-icon"
+            onClick={() => {
+              if (creating && creatingMode === 'bind') {
+                setInlineFlashKey((k) => k + 1);
+                return;
+              }
+              onCloseMainPane?.(); // symmetric with Claude icon's setCreating(false)
               setCreatingMode('bind');
               setCreating(true);
             }}
-            title="Adopt an existing Claude session by uuid"
+            aria-label="Adopt existing Claude session"
+            data-tooltip="Adopt existing Claude session"
           >
-            Bind existing…
+            <span className="sidebar-kind-icon-glyph" aria-hidden="true">↪</span>
           </button>
-        )}
+        </div>
 
         {creating && !narrow && (
           <NewSessionForm
+            // key by mode so flipping Shell↔Bind unmounts the previous
+            // form — otherwise cwd/name/uuidQuery typed in one mode
+            // persists invisibly into the other (state lives on a
+            // single component instance shared by all modes).
+            key={creatingMode}
             drawer={false}
             initialMode={creatingMode}
             onCancel={() => setCreating(false)}
@@ -966,12 +1009,14 @@ export default function Sidebar({
               onOpen(entry);
             }}
             showToast={showToast}
+            flashKey={inlineFlashKey}
           />
         )}
       </div>
 
       {creating && narrow && (
         <NewSessionForm
+          key={creatingMode}
           drawer={true}
           initialMode={creatingMode}
           onCancel={() => setCreating(false)}
@@ -981,6 +1026,7 @@ export default function Sidebar({
             onOpen(entry);
           }}
           showToast={showToast}
+          flashKey={inlineFlashKey}
         />
       )}
 
@@ -1009,9 +1055,17 @@ export default function Sidebar({
       ) : (
         <ul className="session-list">
           {(visibleSessions ?? []).map((s) => {
-            const pending = !s.claudeUuid;
-            const isActive = !pending && s.claudeUuid === activeUuid;
-            const isOpen = !pending && openSet.has(s.claudeUuid);
+            // Shell entries are NOT "pending" — they have no claudeUuid by
+            // design and their PTY spawns immediately on attach. Without
+            // this guard the row picks up the pending CSS hue and the
+            // ARIA label says "click to start" (wrong for shell tabs).
+            const pending = !s.claudeUuid && s.kind !== 'shell';
+            // For shell entries the tab key is the c3 id (App.openTab uses
+            // entry.claudeUuid || entry.id). Use that as the lookup key so
+            // active/open state lights up properly on shell rows.
+            const tabKey = s.kind === 'shell' ? s.id : s.claudeUuid;
+            const isActive = !pending && !!tabKey && tabKey === activeUuid;
+            const isOpen = !pending && !!tabKey && openSet.has(tabKey);
             const className =
               'session' +
               (isActive ? ' active' : '') +
@@ -1126,8 +1180,16 @@ export default function Sidebar({
                     />
                   ) : (
                     <>
+                      {s.kind === 'shell' && (
+                        <span
+                          className="badge sidebar-row-kind-badge"
+                          title="Plain shell tab"
+                        >
+                          sh
+                        </span>
+                      )}
                       <span className="session-name-text">{s.name || s.id}</span>
-                      {pending && <span className="badge">pending</span>}
+                      {pending && s.kind !== 'shell' && <span className="badge">pending</span>}
                       {s.live && !pending && (
                         <span className="badge badge-live" title="PTY live">
                           live

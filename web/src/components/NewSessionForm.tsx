@@ -24,9 +24,13 @@ interface Props {
   // bind succeeds. Caller refreshes list and auto-opens a tab.
   onCreated: (entry: C3Entry) => void;
   showToast: (msg: string, opts?: { variant?: 'info' | 'error' | 'warning' | 'success' }) => void;
+  // Bumped by Sidebar whenever the user re-clicks the kind icon whose
+  // form is already open. Used as a key on a one-shot pulse overlay so
+  // the user gets visual ack rather than a silent no-op.
+  flashKey?: number;
 }
 
-type Mode = 'new' | 'bind';
+type Mode = 'new' | 'shell' | 'bind';
 
 function basename(p: string): string {
   if (!p) return '';
@@ -45,8 +49,10 @@ interface Cache {
 }
 let cache: Cache | null = null;
 
-export default function NewSessionForm({ drawer, initialMode, onCancel, onCreated, showToast }: Props) {
-  const [mode, setMode] = useState<Mode>(initialMode ?? 'new');
+export default function NewSessionForm({ drawer, initialMode, onCancel, onCreated, showToast, flashKey }: Props) {
+  // Mode is fixed by the caller (sidebar icon click) — there's no in-form
+  // mode switcher anymore, so this is intentionally a const-from-prop.
+  const mode: Mode = initialMode ?? 'new';
   const [cwd, setCwd] = useState('');
   const [name, setName] = useState('');
   const [nameTouched, setNameTouched] = useState(false);
@@ -125,19 +131,18 @@ export default function NewSessionForm({ drawer, initialMode, onCancel, onCreate
     };
   }, [drawer]);
 
-  // Drawer-mode ESC dismisses the modal. `when` ensures only the
-  // drawer instance fires (inline mode relies on the caller's button
-  // toggle and on the App-level drawer ESC for the parent sidebar).
+  // ESC cancels the form in both drawer and inline modes — earlier the
+  // inline path was unreachable from the keyboard which was inconsistent
+  // with the drawer/NewSessionPane behavior.
   useShortcut(
     {
       id: 'newSessionForm.close',
       keys: 'Escape',
       scope: 'global',
       label: 'Close new session form',
-      when: () => drawer,
       handler: () => onCancel(),
     },
-    [drawer, onCancel],
+    [onCancel],
   );
 
   const submitNew = useCallback(async () => {
@@ -149,6 +154,42 @@ export default function NewSessionForm({ drawer, initialMode, onCancel, onCreate
     } catch (err) {
       if (err instanceof ApiError) {
         // Parse "validation failed: cwd: <reason>" form.
+        const m = err.body.match(/^validation failed:\s*(.+)$/);
+        setError(m ? m[1] : err.body || `Create failed (HTTP ${err.status})`);
+      } else {
+        setError('Create failed');
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  }, [cwd, name, onCreated]);
+
+  // submitShell posts {kind:'shell', cwd, name} — no firstPrompt, no
+  // claudeUuid. Server validates cwd (absolute + existing dir) and
+  // returns the created entry; the parent auto-opens its tab. argv is
+  // left as the server default ($SHELL -i) — a custom-argv knob can
+  // land later if anyone asks.
+  const submitShell = useCallback(async () => {
+    setError(null);
+    setSubmitting(true);
+    try {
+      const r = await fetch('/api/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          kind: 'shell',
+          cwd: cwd.trim(),
+          name: name.trim(),
+        }),
+      });
+      if (!r.ok) {
+        const body = (await r.text()).trim();
+        throw new ApiError(r.status, body);
+      }
+      const entry = (await r.json()) as C3Entry;
+      onCreated(entry);
+    } catch (err) {
+      if (err instanceof ApiError) {
         const m = err.body.match(/^validation failed:\s*(.+)$/);
         setError(m ? m[1] : err.body || `Create failed (HTTP ${err.status})`);
       } else {
@@ -218,47 +259,15 @@ export default function NewSessionForm({ drawer, initialMode, onCancel, onCreate
 
   const body = (
     <div ref={rootRef} className={'newsession-form' + (drawer ? ' is-drawer' : '')}>
-      {/* Icon picker for tab kind. Replaces the v0.2.x "New | Bind existing"
-        * text-tab strip. Forward-compatible: a third "Shell" icon will land
-        * once the plain-terminal feature ships (PR-B). ←/→ navigate, Enter
-        * activates. */}
-      <div
-        className="newsession-icons"
-        role="tablist"
-        aria-label="New session kind"
-        onKeyDown={(e) => {
-          if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
-            e.preventDefault();
-            setMode((m) => (m === 'new' ? 'bind' : 'new'));
-          }
-        }}
-      >
-        <button
-          type="button"
-          role="tab"
-          aria-selected={mode === 'new'}
-          tabIndex={mode === 'new' ? 0 : -1}
-          className={'newsession-icon' + (mode === 'new' ? ' active' : '')}
-          onClick={() => setMode('new')}
-          title="New Claude session"
-        >
-          <span className="newsession-icon-glyph" aria-hidden="true">✦</span>
-          <span className="newsession-icon-label">Claude</span>
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={mode === 'bind'}
-          tabIndex={mode === 'bind' ? 0 : -1}
-          className={'newsession-icon' + (mode === 'bind' ? ' active' : '')}
-          onClick={() => setMode('bind')}
-          title="Adopt an existing Claude session by uuid"
-        >
-          <span className="newsession-icon-glyph" aria-hidden="true">⛓</span>
-          <span className="newsession-icon-label">Bind</span>
-        </button>
-      </div>
-
+      {/* One-shot pulse overlay: remounted via `key` whenever the user
+        * re-clicks the sidebar icon whose form is already open. Skipped
+        * on initial mount (flashKey starts at 0 / undefined). */}
+      {flashKey ? (
+        <div key={flashKey} className="form-flash-pulse" aria-hidden="true" />
+      ) : null}
+      {/* No in-form mode picker: the sidebar's 3-icon strip already picked
+        * the kind. To switch, the user cancels and clicks a different
+        * sidebar icon. Keeping a second picker here was pure duplication. */}
       {mode === 'new' && (
         <form
           className="newsession-body"
@@ -338,6 +347,89 @@ export default function NewSessionForm({ drawer, initialMode, onCancel, onCreate
               disabled={submitting || !cwd.trim()}
             >
               {submitting ? 'Creating…' : 'Create'}
+            </button>
+          </div>
+        </form>
+      )}
+
+      {mode === 'shell' && (
+        <form
+          className="newsession-body"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (!submitting) void submitShell();
+          }}
+        >
+          <label className="field">
+            <span className="field-label">cwd</span>
+            <div className="field-cwd">
+              <input
+                ref={firstInputRef}
+                type="text"
+                value={cwd}
+                placeholder="/absolute/path"
+                onChange={(e) => {
+                  setCwd(e.target.value);
+                  setDropdownOpen(true);
+                }}
+                onFocus={() => setDropdownOpen(true)}
+                onBlur={() => {
+                  window.setTimeout(() => setDropdownOpen(false), 120);
+                }}
+                aria-expanded={dropdownOpen}
+                aria-autocomplete="list"
+                spellCheck={false}
+              />
+              {dropdownOpen && cwds.length > 0 && (
+                <ul className="cwd-dropdown" role="listbox">
+                  {cwds.slice(0, 30).map((c) => (
+                    <li key={c}>
+                      <button
+                        type="button"
+                        className="cwd-option"
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          setCwd(c);
+                          setDropdownOpen(false);
+                        }}
+                      >
+                        {c}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </label>
+          <label className="field">
+            <span className="field-label">name</span>
+            <input
+              type="text"
+              value={name}
+              placeholder={cwd ? basename(cwd) : 'shell tab name'}
+              onChange={(e) => {
+                setName(e.target.value);
+                setNameTouched(true);
+              }}
+              spellCheck={false}
+            />
+          </label>
+          {/* No prompt textarea for shell — by design. */}
+          {error && (
+            <div className="newsession-error" role="alert">
+              {error}
+            </div>
+          )}
+          <div className="newsession-actions">
+            <button type="button" className="btn btn-sm" onClick={onCancel} disabled={submitting}>
+              Cancel
+            </button>
+            <button
+              type="submit"
+              className="btn btn-sm primary"
+              disabled={submitting || !cwd.trim()}
+            >
+              {submitting ? 'Opening…' : 'Open shell'}
             </button>
           </div>
         </form>

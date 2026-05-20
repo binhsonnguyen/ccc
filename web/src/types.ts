@@ -11,6 +11,10 @@ export interface C3Entry {
   // True iff the ptymgr currently has an attached PTY for this entry's
   // claudeUuid (or pending c3-id while uuid is still empty).
   live?: boolean;
+  // kind discriminates entry type. Absent ⇒ 'claude' (legacy). 'shell'
+  // means a plain $SHELL -i tab — no claudeUuid, no transcript, no
+  // discovery handshake. Mirrors core.C3Entry.Kind (json:"kind,omitempty").
+  kind?: 'claude' | 'shell';
 }
 
 // Claude session record returned by GET /api/claude-sessions in the
@@ -79,4 +83,8 @@ export interface Tab {
   // the user sees the real reason (e.g. "claude not found in PATH")
   // instead of a generic "Disconnected".
   errorMessage?: string;
+  // kind discriminates the tab's PTY kind. Absent ⇒ 'claude'. Drives the
+  // exit-overlay copy ("claude exited" vs "Shell exited"), the sidebar
+  // badge, and (eventually) which icon/colour the tab strip shows.
+  kind?: 'claude' | 'shell';
 }

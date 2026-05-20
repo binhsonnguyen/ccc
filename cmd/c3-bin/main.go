@@ -113,6 +113,12 @@ func runPicker(opts picker.Options, archivedView bool) error {
 	} else {
 		entries = f.ListActive()
 	}
+	// CLI surface decision (v1): the c3 fzf picker is claude-only. Shell
+	// entries are GUI-only — there's no resume command to emit, and the
+	// fzf picker has no idea how to spawn a shell tab. Filter them out at
+	// the picker boundary so the rest of the CLI (rename / archive / rm by
+	// id) still works on shell entries when the user knows the id.
+	entries = filterOutShell(entries)
 
 	res, err := picker.PickC3(entries, opts)
 	if err != nil {
@@ -383,6 +389,7 @@ func emitRows(archivedView bool) error {
 	} else {
 		entries = f.ListActive()
 	}
+	entries = filterOutShell(entries)
 	rows := picker.FormatC3Rows(entries)
 	if len(rows) == 0 {
 		// fzf reload with empty input clears the list. Provide a hint row
@@ -396,6 +403,13 @@ func emitRows(archivedView bool) error {
 
 // lazyLink fills in ClaudeUUID for any c3-session that's still pending,
 // by matching cwd + creation time against Claude's session storage.
+//
+// CRITICAL: shell entries (Kind == "shell") have ClaudeUUID == "" forever
+// by design. They must NEVER be auto-bound to a claude uuid even if a
+// claude JSONL happens to appear in the same cwd. Both the pre-check and
+// the in-lock loop filter on IsShell() so a shell row can't accidentally
+// adopt a claude session that was started in the same project dir from
+// another terminal.
 func lazyLink() error {
 	// Cheap read-only check first to avoid taking the lock on every invocation.
 	f, err := store.Load()
@@ -403,7 +417,11 @@ func lazyLink() error {
 		return err
 	}
 	pending := false
-	for _, e := range f.Sessions {
+	for i := range f.Sessions {
+		e := &f.Sessions[i]
+		if e.IsShell() {
+			continue
+		}
 		if e.ClaudeUUID == "" {
 			pending = true
 			break
@@ -425,6 +443,10 @@ func lazyLink() error {
 		}
 		for i := range f.Sessions {
 			e := &f.Sessions[i]
+			if e.IsShell() {
+				// Shell entries: ClaudeUUID stays "" for life; never bind.
+				continue
+			}
 			if e.ClaudeUUID != "" {
 				continue
 			}
@@ -471,6 +493,22 @@ func emit(cmd string) {
 	if os.Getenv("C3_NO_WRAPPER") == "1" {
 		fmt.Fprintln(os.Stderr, "c3: would run:", cmd)
 	}
+}
+
+// filterOutShell drops shell entries from a slice of c3 entries. Used at
+// the picker boundary so the fzf list stays claude-only — shell tabs are
+// GUI-only in v1 because the CLI has no notion of spawning $SHELL -i
+// inside a tab; the emitted command for a picker selection is shaped for
+// `claude --resume <uuid>`.
+func filterOutShell(in []core.C3Entry) []core.C3Entry {
+	out := make([]core.C3Entry, 0, len(in))
+	for _, e := range in {
+		if e.IsShell() {
+			continue
+		}
+		out = append(out, e)
+	}
+	return out
 }
 
 func shellQuote(s string) string {

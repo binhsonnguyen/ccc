@@ -146,14 +146,20 @@ type Manager struct {
 	// server uses it to PATCH the entry via usecase.Bind.
 	onUUIDDiscovered func(sessionKey, newUUID string)
 
-	// startPTY is the function used to spawn a PTY. Production code uses
-	// ptyrunner.Start; tests swap in a stub so they don't depend on the
-	// real `claude` binary being installed.
+	// startPTY is the function used to spawn a claude PTY. Production code
+	// uses ptyrunner.Start; tests swap in a stub so they don't depend on
+	// the real `claude` binary being installed.
 	//
 	// firstPrompt is non-empty only on the inline first-prompt flow
 	// (client POST included firstPrompt + claudeUuid). The runner forwards
 	// it to claude as a positional arg so the TUI pre-fills + auto-submits.
 	startPTY func(cwd, uuid, firstPrompt string) (*ptyrunner.Session, error)
+
+	// startShell is the function used to spawn a plain shell PTY. argv ==
+	// nil means "default $SHELL -i" (caller responsibility to validate
+	// non-empty when set). Production code uses ptyrunner.StartShell;
+	// tests swap in a stub.
+	startShell func(cwd string, argv []string) (*ptyrunner.Session, error)
 
 	// claudeScan is the claudefs scanner used by the discovery loop.
 	// Tests swap in a fake that returns synthetic sessions.
@@ -172,10 +178,27 @@ func New() *Manager {
 		sessions:     map[string]*Session{},
 		claimedUUIDs: map[string]bool{},
 		startPTY:     ptyrunner.Start,
+		startShell:   ptyrunner.StartShell,
 		claudeScan:   claudefs.New(),
 		firstPrompts: map[string]string{},
 	}
 }
+
+// SpawnSpec is the request from the HTTP layer for what to start when a
+// fresh PTY is needed on Attach. Discriminated by Kind:
+//   - "claude" (or ""): start `claude` with optional --resume/--session-id
+//     and optional FirstPrompt; discovery loop runs if ClaudeUUID is empty.
+//   - "shell": start a plain shell (argv override or $SHELL -i); discovery
+//     loop NEVER runs, pending control frame is NEVER sent.
+type SpawnSpec struct {
+	Kind        string   // "" | "claude" | "shell"
+	CWD         string
+	ClaudeUUID  string   // claude only
+	FirstPrompt string   // claude only
+	Argv        []string // shell only; nil ⇒ default
+}
+
+func (s SpawnSpec) isShell() bool { return s.Kind == "shell" }
 
 // SetFirstPrompt registers a prompt to auto-submit on the next Attach for
 // the given uuid. The prompt is held in-memory only — never persisted to
@@ -430,35 +453,64 @@ func (m *Manager) fireActivity() {
 // Returns the bound Session. Caller MUST eventually call Detach when the
 // client disconnects.
 func (m *Manager) Attach(key, cwd, claudeUUID string, c Client) (*Session, error) {
+	return m.AttachSpec(key, SpawnSpec{
+		Kind:       "claude",
+		CWD:        cwd,
+		ClaudeUUID: claudeUUID,
+	}, c)
+}
+
+// AttachSpec is the SpawnSpec-aware variant of Attach. The server uses
+// this directly so it can request a shell PTY without faking up a claude
+// uuid; existing callers (and tests) keep working via the Attach wrapper.
+//
+// Critical gates baked in here:
+//   - Discovery loop is started iff spec is claude AND ClaudeUUID == "".
+//     A shell entry with an empty uuid must NOT trigger discovery; that
+//     would scan claudefs and potentially bind a stray claude session to
+//     a shell c3-id (the lazyLink/picker gate fixes the other direction).
+//   - The "pending" control frame is suppressed for shell — shell tabs
+//     have no claude-side initialisation; the client should go straight
+//     to connected.
+func (m *Manager) AttachSpec(key string, spec SpawnSpec, c Client) (*Session, error) {
 	// Pop any registered first-prompt for this uuid BEFORE the lock —
 	// it's a separate mutex and the pop is naturally a one-shot, so
-	// holding both at once buys nothing.
-	firstPrompt := m.popFirstPrompt(claudeUUID)
+	// holding both at once buys nothing. Shell spec never has a
+	// firstPrompt by construction (the server's HTTP layer ignores it).
+	firstPrompt := ""
+	if !spec.isShell() {
+		firstPrompt = m.popFirstPrompt(spec.ClaudeUUID)
+	}
 	m.mu.Lock()
 	s, ok := m.sessions[key]
 	if !ok {
-		p, err := m.startPTY(cwd, claudeUUID, firstPrompt)
+		var (
+			p   *ptyrunner.Session
+			err error
+		)
+		if spec.isShell() {
+			p, err = m.startShell(spec.CWD, spec.Argv)
+		} else {
+			p, err = m.startPTY(spec.CWD, spec.ClaudeUUID, firstPrompt)
+		}
 		if err != nil {
 			m.mu.Unlock()
 			return nil, err
 		}
 		s = &Session{
 			Key:          key,
-			UUID:         claudeUUID,
+			UUID:         spec.ClaudeUUID, // empty for shell, kept for symmetry
 			pty:          p,
 			ring:         newRing(scrollbackSize),
 			done:         make(chan struct{}),
 			lastActivity: time.Now(),
 		}
-		// Pending session: spawn the discovery goroutine. Snapshot uuids
-		// present in claudefs for THIS cwd BEFORE we go to sleep so we
-		// only act on uuids that appeared after this spawn. We use
-		// ScanProject here (single project dir) for the same reason as
-		// the loop itself: full Scan() can be expensive.
-		if claudeUUID == "" {
+		// Discovery gate: claude + no uuid yet. Shell entries skip this
+		// branch even though their "uuid" is empty.
+		if !spec.isShell() && spec.ClaudeUUID == "" {
 			s.stopDiscovery = make(chan struct{})
-			snapshot := snapshotProjectUUIDs(m.claudeScan, cwd)
-			go m.discoveryLoop(s, cwd, snapshot)
+			snapshot := snapshotProjectUUIDs(m.claudeScan, spec.CWD)
+			go m.discoveryLoop(s, spec.CWD, snapshot)
 		}
 		m.sessions[key] = s
 		go m.readLoop(s)
@@ -497,7 +549,12 @@ func (m *Manager) Attach(key, cwd, claudeUUID string, c Client) (*Session, error
 	// uses this to disable stdin until the matching {"type":"ready"}
 	// frame arrives at discovery time — avoids TTY line-discipline
 	// reorder/duplicate while claude switches to raw mode.
-	pending := s.UUID == ""
+	//
+	// Shell sessions skip this: there's no claude-side handshake, so
+	// "uuid empty" doesn't carry the "still initialising" meaning. The
+	// gate is on spec.isShell() rather than on s.UUID because the rekey
+	// path can flip s.UUID asynchronously for claude sessions.
+	pending := s.UUID == "" && !spec.isShell()
 	s.mu.Unlock()
 	if pending {
 		_ = c.WriteControl(map[string]any{"type": "pending"})

@@ -244,49 +244,141 @@ func handleListSessions(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]entryWithLive, 0, len(entries))
 	for _, e := range entries {
-		out = append(out, entryWithLive{C3Entry: e, Live: manager.HasUUID(e.ClaudeUUID)})
+		// Shell entries have ClaudeUUID == "" forever — HasUUID would
+		// never match. The PTY for a shell tab is keyed by c3 id in the
+		// manager, so check HasKey(e.ID) too.
+		live := manager.HasUUID(e.ClaudeUUID)
+		if !live && e.IsShell() {
+			live = manager.HasKey(e.ID)
+		}
+		out = append(out, entryWithLive{C3Entry: e, Live: live})
 	}
 	writeJSON(w, out)
 }
 
 func handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		CWD         string `json:"cwd"`
-		Name        string `json:"name"`
-		FirstPrompt string `json:"firstPrompt"`
-		ClaudeUUID  string `json:"claudeUuid"`
+		CWD         string   `json:"cwd"`
+		Name        string   `json:"name"`
+		FirstPrompt string   `json:"firstPrompt"`
+		ClaudeUUID  string   `json:"claudeUuid"`
+		Kind        string   `json:"kind"`    // "" or "shell"
+		Command     []string `json:"command"` // shell-only argv override; nil ⇒ default
+		// commandPresent: was the JSON field actually present (true) or
+		// just absent / null (false)? Go's default decoder collapses both
+		// into nil so we can't tell empty-array from missing without a
+		// raw round-trip. Below we re-decode into a map[string]any to
+		// detect [].
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	// First-pass decode for typed fields.
+	raw, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "read body", http.StatusBadRequest)
+		return
+	}
+	if err := json.Unmarshal(raw, &body); err != nil {
 		http.Error(w, "invalid json", http.StatusBadRequest)
 		return
 	}
-	// Edge case (counter-review #3): a client-supplied uuid without a
-	// firstPrompt would force `claude --resume <uuid>` against a uuid
-	// claude has never seen → spawn error. Quietly drop the uuid in that
-	// case and fall back to the pending flow.
-	uuid := strings.TrimSpace(body.ClaudeUUID)
-	firstPrompt := body.FirstPrompt
-	if uuid != "" && firstPrompt == "" {
-		uuid = ""
+	// Detect command: [] explicitly (vs. absent / null). Reject so the
+	// invariant "Command nil ⇒ default; Command non-nil ⇒ exact argv"
+	// stays usable — an empty argv would crash exec.LookPath downstream
+	// and is never what the caller meant.
+	{
+		var probe map[string]json.RawMessage
+		if json.Unmarshal(raw, &probe) == nil {
+			if rawCmd, ok := probe["command"]; ok {
+				var arr []string
+				if json.Unmarshal(rawCmd, &arr) == nil && arr != nil && len(arr) == 0 {
+					http.Error(w, "validation failed: command must be non-empty when set", http.StatusBadRequest)
+					return
+				}
+			}
+		}
 	}
-	if uuid != "" && !usecase.IsValidUUID(uuid) {
-		http.Error(w, "validation failed: claudeUuid is not a valid uuid", http.StatusBadRequest)
-		return
+
+	switch body.Kind {
+	case "", "claude":
+		// Edge case (counter-review #3): a client-supplied uuid without a
+		// firstPrompt would force `claude --resume <uuid>` against a uuid
+		// claude has never seen → spawn error. Quietly drop the uuid in that
+		// case and fall back to the pending flow.
+		uuid := strings.TrimSpace(body.ClaudeUUID)
+		firstPrompt := body.FirstPrompt
+		if uuid != "" && firstPrompt == "" {
+			uuid = ""
+		}
+		if uuid != "" && !usecase.IsValidUUID(uuid) {
+			http.Error(w, "validation failed: claudeUuid is not a valid uuid", http.StatusBadRequest)
+			return
+		}
+		entry, err := usecase.NewEntry(store, body.CWD, body.Name, uuid)
+		if err != nil {
+			mapUsecaseError(w, err)
+			return
+		}
+		// Stash the prompt BEFORE returning so a fast client (POST →
+		// immediate WS attach) finds it when Attach runs.
+		if entry.ClaudeUUID != "" && firstPrompt != "" {
+			manager.SetFirstPrompt(entry.ClaudeUUID, firstPrompt)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(entry)
+
+	case "shell":
+		// Shell branch: ignore firstPrompt / claudeUuid even if present
+		// (they have no meaning here). Reuse usecase-style validation by
+		// hand because NewEntry is claude-shaped.
+		entry, err := createShellEntry(body.CWD, body.Name, body.Command)
+		if err != nil {
+			mapUsecaseError(w, err)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(entry)
+
+	default:
+		http.Error(w, "validation failed: unknown kind "+body.Kind, http.StatusBadRequest)
 	}
-	entry, err := usecase.NewEntry(store, body.CWD, body.Name, uuid)
+}
+
+// createShellEntry validates and persists a new shell c3-session.
+// Mirrors usecase.NewEntry's invariants (absolute cwd, exists, is dir,
+// name non-empty + bounded) but writes Kind=shell + Command instead of
+// going through the claude path.
+func createShellEntry(cwd, name string, argv []string) (core.C3Entry, error) {
+	if !filepath.IsAbs(cwd) {
+		return core.C3Entry{}, fmt.Errorf("%w: cwd must be absolute, got %q", usecase.ErrValidation, cwd)
+	}
+	info, err := os.Stat(cwd)
 	if err != nil {
-		mapUsecaseError(w, err)
-		return
+		return core.C3Entry{}, fmt.Errorf("%w: cwd: %v", usecase.ErrValidation, err)
 	}
-	// Stash the prompt BEFORE returning so a fast client (POST → immediate
-	// WS attach) finds it when Attach runs. The map is keyed by uuid so
-	// the new entry's claudeUuid must already be set above.
-	if entry.ClaudeUUID != "" && firstPrompt != "" {
-		manager.SetFirstPrompt(entry.ClaudeUUID, firstPrompt)
+	if !info.IsDir() {
+		return core.C3Entry{}, fmt.Errorf("%w: cwd is not a directory: %s", usecase.ErrValidation, cwd)
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(entry)
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = filepath.Base(cwd)
+	}
+	if name == "" {
+		return core.C3Entry{}, fmt.Errorf("%w: name is empty", usecase.ErrValidation)
+	}
+	if argv != nil && len(argv) == 0 {
+		// Belt-and-braces — handler should have caught this.
+		return core.C3Entry{}, fmt.Errorf("%w: command must be non-empty when set", usecase.ErrValidation)
+	}
+	var created core.C3Entry
+	err = store.Mutate(func(f *core.ArchiveFile) error {
+		created = f.AddShellEntry(name, cwd, argv)
+		return nil
+	})
+	if err != nil {
+		return core.C3Entry{}, err
+	}
+	return created, nil
 }
 
 // mapUsecaseError translates usecase sentinels into HTTP status codes.
@@ -758,6 +850,11 @@ func handleSessionPTY(w http.ResponseWriter, r *http.Request, id, originHost, or
 	}
 	// Pending-uuid path: key by c3 id, spawn claude (no resume), let the
 	// discovery loop fill in the uuid later (D-7).
+	// Shell path: ALWAYS key by c3 id (claudeUuid is "" forever for
+	// shell). Note (v1 trade-off): shell PTY does not survive server
+	// crash; a reattach after restart re-spawns a fresh shell with empty
+	// scrollback. Acceptable in v1; "overlay-with-restart" option deferred
+	// until users complain.
 	sessionKey := e.ClaudeUUID
 	if sessionKey == "" {
 		sessionKey = e.ID
@@ -783,7 +880,19 @@ func handleSessionPTY(w http.ResponseWriter, r *http.Request, id, originHost, or
 	conn.SetReadLimit(64 * 1024)
 
 	client := newWSClient(conn)
-	sess, err := manager.Attach(sessionKey, e.CWD, e.ClaudeUUID, client)
+	spec := ptymgr.SpawnSpec{
+		Kind:       "claude",
+		CWD:        e.CWD,
+		ClaudeUUID: e.ClaudeUUID,
+	}
+	if e.IsShell() {
+		spec = ptymgr.SpawnSpec{
+			Kind: "shell",
+			CWD:  e.CWD,
+			Argv: e.Command,
+		}
+	}
+	sess, err := manager.AttachSpec(sessionKey, spec, client)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pty[%s]: attach failed: %v\n", id, err)
 		_ = client.WriteControl(map[string]any{"type": "error", "message": err.Error()})
