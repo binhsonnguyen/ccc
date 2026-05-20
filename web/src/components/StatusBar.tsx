@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { formatKeys } from '../lib/shortcuts';
 import { getTerm } from '../lib/terminals';
 import { THEME_NAMES, type ThemeName } from '../lib/themes';
@@ -23,10 +23,11 @@ const THEME_META: Record<ThemeName, { glyph: string; label: string }> = {
   'solarized-dark': { glyph: '◐', label: 'Solarized' },
 };
 
-// ThemeToggle cycles dark → light → solarized → dark. Rendered in both
-// the full and empty status bar so it's reachable even on the Welcome
-// screen (no active tab). Click-only global control; the palette and
-// cheatsheet remain the keyboard paths.
+// ThemeToggle opens a small popup menu listing the three themes with a
+// checkmark on the active one — click to pick directly (no cycling).
+// Rendered in both the full and empty status bar so it's reachable on
+// the Welcome screen too. The palette and cheatsheet remain the
+// keyboard paths. Menu opens upward (status bar is page-bottom).
 function ThemeToggle({
   themeName,
   onThemeChange,
@@ -34,20 +35,71 @@ function ThemeToggle({
   themeName: ThemeName;
   onThemeChange: (n: ThemeName) => void;
 }) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
   const meta = THEME_META[themeName];
-  const idx = THEME_NAMES.indexOf(themeName);
-  const next = THEME_NAMES[(idx + 1) % THEME_NAMES.length];
+
+  // Close on outside click / Escape while open.
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
   return (
-    <button
-      type="button"
-      className="statusbar-theme"
-      onClick={() => onThemeChange(next)}
-      title={`Theme: ${meta.label} — click for ${THEME_META[next].label}`}
-      aria-label={`Theme: ${meta.label}. Click to switch to ${THEME_META[next].label}.`}
-    >
-      <span className="statusbar-theme-glyph" aria-hidden="true">{meta.glyph}</span>
-      {meta.label}
-    </button>
+    <div className="statusbar-theme-wrap" ref={wrapRef}>
+      <button
+        type="button"
+        className="statusbar-theme"
+        onClick={() => setOpen((v) => !v)}
+        title={`Theme: ${meta.label}`}
+        aria-label={`Theme: ${meta.label}. Click to choose a theme.`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+      >
+        <span className="statusbar-theme-glyph" aria-hidden="true">{meta.glyph}</span>
+        {meta.label}
+      </button>
+      {open && (
+        <div className="row-menu statusbar-theme-menu" role="menu">
+          {THEME_NAMES.map((n) => {
+            const m = THEME_META[n];
+            const active = n === themeName;
+            return (
+              <button
+                key={n}
+                type="button"
+                role="menuitemradio"
+                aria-checked={active}
+                className="row-menu-item"
+                onClick={() => {
+                  onThemeChange(n);
+                  setOpen(false);
+                }}
+              >
+                <span>
+                  <span className="statusbar-theme-glyph" aria-hidden="true">{m.glyph}</span>
+                  {' '}{m.label}
+                </span>
+                <span aria-hidden="true">{active ? '✓' : ''}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }
 

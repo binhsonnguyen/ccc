@@ -1318,6 +1318,16 @@ code {
 }
 .statusbar-theme:hover { color: var(--text); background: var(--overlay); }
 .statusbar-theme-glyph { font-size: 12px; line-height: 1; }
+/* Theme menu anchors to the toggle and opens UPWARD (status bar is at
+   the page bottom). Right-aligned so it doesn't spill off-screen. */
+.statusbar-theme-wrap { position: relative; }
+.statusbar-theme-menu {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  right: 0;
+  min-width: 160px;
+  z-index: 50;
+}
 .statusbar-left,
 .statusbar-center,
 .statusbar-right {
