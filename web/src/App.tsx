@@ -7,7 +7,14 @@ import Welcome from './components/Welcome';
 import NewSessionPane from './components/NewSessionPane';
 import Palette, { type PaletteActions } from './components/Palette';
 import Cheatsheet from './components/Cheatsheet';
+import PtyDimsDialog from './components/PtyDimsDialog';
 import { ToastProvider, useToast } from './components/Toast';
+import {
+  readColCap,
+  readRowCap,
+  writeColCap,
+  writeRowCap,
+} from './lib/caps';
 import { archiveSession, listSessions } from './lib/api';
 import { useShortcut } from './lib/shortcuts';
 import { disposeTerm, getTerm } from './lib/terminals';
@@ -138,6 +145,17 @@ function AppInner() {
   const onThemeChange = useCallback((next: ThemeName) => {
     applyTheme(next);
     setThemeName(next);
+  }, []);
+
+  // PTY dim caps. Global, persisted in localStorage. null = follow
+  // viewport. The dialog (PtyDimsDialog) edits a draft and writes here
+  // on Apply; TerminalPane refits + re-resizes via a deps-watching effect.
+  const [colCap, setColCap] = useState<number | null>(() => readColCap());
+  const [rowCap, setRowCap] = useState<number | null>(() => readRowCap());
+  const [dimsDialogOpen, setDimsDialogOpen] = useState(false);
+  const applyDims = useCallback((c: number | null, r: number | null) => {
+    setColCap(c); writeColCap(c);
+    setRowCap(r); writeRowCap(r);
   }, []);
 
   // Sidebar/drawer state. Default: respect user pref if set, otherwise
@@ -772,6 +790,8 @@ function AppInner() {
                   onError={onError}
                   onClose={closeTab}
                   onMention={onMention}
+                  colCap={colCap}
+                  rowCap={rowCap}
                 />
               ))}
             </>
@@ -794,6 +814,8 @@ function AppInner() {
                 onError={onError}
                 onClose={closeTab}
                 onMention={onMention}
+                colCap={colCap}
+                rowCap={rowCap}
               />
             ))
           )}
@@ -814,6 +836,7 @@ function AppInner() {
               pulse={pulse}
               themeName={themeName}
               onThemeChange={onThemeChange}
+              onOpenDims={() => setDimsDialogOpen(true)}
               onCopyCwd={(cwd) => {
                 if (!cwd) return;
                 // Clipboard requires a secure context. Loopback HTTP
@@ -857,6 +880,29 @@ function AppInner() {
         themeName={themeName}
         onThemeChange={onThemeChange}
       />
+      {(() => {
+        // Viewport hint for the "Max (NN)" radio labels. Read the active
+        // term's current cols/rows — these reflect the clamped grid when
+        // a cap is active, so we have to undo the clamp to show the true
+        // viewport. Cheap approximation: the active xterm's `cols` is
+        // either viewport (no cap) or capped value (cap < viewport). When
+        // a cap is in effect we just show the cap as the parenthetical —
+        // it's enough of a hint to the user.
+        const t = activeUuid ? getTerm(activeUuid) : null;
+        const vCols = t?.term.cols ?? 0;
+        const vRows = t?.term.rows ?? 0;
+        return (
+          <PtyDimsDialog
+            open={dimsDialogOpen}
+            colCap={colCap}
+            rowCap={rowCap}
+            viewportCols={vCols}
+            viewportRows={vRows}
+            onApply={applyDims}
+            onClose={() => setDimsDialogOpen(false)}
+          />
+        );
+      })()}
     </div>
   );
 }

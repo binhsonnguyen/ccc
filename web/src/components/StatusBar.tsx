@@ -13,6 +13,8 @@ interface Props {
   onCopyCwd: (cwd: string) => void;
   themeName: ThemeName;
   onThemeChange: (n: ThemeName) => void;
+  // Click handler for the cols×rows read-out. App opens the dims dialog.
+  onOpenDims: () => void;
 }
 
 // Per-theme glyph + human label for the cycle button. Glyphs picked to
@@ -154,7 +156,7 @@ const STATE_LABEL: Record<TabStatus, string> = {
   error: 'error',
 };
 
-export default function StatusBar({ activeTab, pulse, onCopyCwd, themeName, onThemeChange }: Props) {
+export default function StatusBar({ activeTab, pulse, onCopyCwd, themeName, onThemeChange, onOpenDims }: Props) {
   // 1 Hz tick drives both the dims read-out and idle counter without
   // forcing a render every WS frame. Cheap and keeps the bar quiet.
   const [, setTick] = useState(0);
@@ -235,9 +237,15 @@ export default function StatusBar({ activeTab, pulse, onCopyCwd, themeName, onTh
         {dims && (
           <>
             <span className="statusbar-sep" aria-hidden="true">·</span>
-            <span className="statusbar-dims" aria-label="terminal dimensions">
+            <button
+              type="button"
+              className="statusbar-dims"
+              aria-label={`Terminal dimensions ${dims}. Click to configure.`}
+              title="Configure max cols / rows"
+              onClick={onOpenDims}
+            >
               {dims}
-            </span>
+            </button>
           </>
         )}
       </div>
