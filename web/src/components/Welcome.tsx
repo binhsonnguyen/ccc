@@ -74,7 +74,7 @@ export default function Welcome({ onNewSession, onShowCheatsheet }: Props) {
           <Card
             icon="＋"
             title="New session"
-            desc="Pick a directory to start claude in."
+            desc="Start Claude, a shell, or bind an existing session."
             hint={formatKeys('Mod+n')}
             ariaLabel="Create a new session"
             onClick={onNewSession}

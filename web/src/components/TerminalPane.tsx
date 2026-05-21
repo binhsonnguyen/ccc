@@ -52,6 +52,23 @@ const IDLE_POLL_MS = 2000;
 // outside the window.
 const EXIT_SUPPRESS_MS = 500;
 
+// Shell exit overlay copy. Go's exec.ExitError.ExitCode() returns -1 when
+// the process was killed by a signal (SIGKILL/SIGTERM etc.) on Unix —
+// renaming that to "killed" is more honest than showing a meaningless
+// negative number. undefined means we never received an exit frame.
+function shellExitTitle(code: number | undefined): string {
+  if (code === undefined) return 'Shell exited';
+  if (code === 0) return 'Shell exited';
+  if (code < 0) return 'Shell killed';
+  return `Shell exited (code ${code})`;
+}
+function shellExitHint(code: number | undefined): string | null {
+  if (code === undefined) return 'Exit status unknown.';
+  if (code === 0) return null;
+  if (code < 0) return 'The shell process was terminated by a signal.';
+  return 'Non-zero exit — the shell likely crashed or returned an error.';
+}
+
 // humanizeIdle renders a millisecond duration as a compact, English-only
 // "Xh Ym" / "Ym" / "Xs" string. Intentionally tiny — i18n is out of scope
 // for v5 and the banner has at most ~20 chars to play with.
@@ -653,9 +670,8 @@ export default function TerminalPane({
           <div className="overlay-card">
             {tab.kind === 'shell' ? (
               <>
-                <h2 id={`exited-${tab.claudeUuid}`}>
-                  Shell exited (code {tab.exitCode ?? '?'})
-                </h2>
+                <h2 id={`exited-${tab.claudeUuid}`}>{shellExitTitle(tab.exitCode)}</h2>
+                {shellExitHint(tab.exitCode) && <p>{shellExitHint(tab.exitCode)}</p>}
                 <p>
                   Restart spawns a fresh shell in the same cwd. Scrollback
                   from the previous session is not preserved.

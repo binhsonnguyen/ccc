@@ -82,6 +82,16 @@ interface PreviewState {
   text: string | null; // null = loading
 }
 
+// Words a session contributes to the filter haystack (in addition to
+// name/cwd). Single switch arm per kind so adding `file-nav` / `ssh`
+// later means one line here, not a manual edit at every callsite.
+function kindKeyword(s: C3Entry): string {
+  switch (s.kind) {
+    case 'shell': return 'shell sh';
+    default:      return 'claude';
+  }
+}
+
 // Module-level cache so hover → leave → hover doesn't re-fetch within
 // 5 s. Keyed by c3 id; value is the raw text body the server returned
 // (still containing ANSI — stripping happens in the component).
@@ -564,14 +574,21 @@ export default function Sidebar({
           onClick: () => void doRemove(s),
         },
         { id: 'sep1', label: '', separator: true },
-        {
-          id: 'copy-uuid',
-          label: 'Copy uuid',
-          disabled: pending,
-          onClick: () => {
-            if (s.claudeUuid) void navigator.clipboard?.writeText(s.claudeUuid);
-          },
-        },
+        // Copy uuid is hidden (not disabled) for shell rows — shell tabs
+        // never have a Claude uuid by design, so there's no future state
+        // where the item works. Disabled-vs-hide: disable is right for
+        // transient "pending" claude rows (will work soon); hide is right
+        // for kinds that never qualify.
+        ...(s.kind === 'shell'
+          ? []
+          : [{
+              id: 'copy-uuid' as const,
+              label: 'Copy uuid',
+              disabled: pending,
+              onClick: () => {
+                if (s.claudeUuid) void navigator.clipboard?.writeText(s.claudeUuid);
+              },
+            }]),
         {
           id: 'copy-cwd',
           label: 'Copy cwd',
@@ -744,14 +761,16 @@ export default function Sidebar({
     [],
   );
 
-  // Apply filter to the visible list. Combined "name + cwd" substring,
-  // case-insensitive. We keep the original sessions array intact for
-  // shortcut lookups (focusedRowEntry, menu rowId resolution) — those
-  // shouldn't break just because a row got hidden by filter.
+  // Apply filter to the visible list. Combined "name + cwd + kind"
+  // substring, case-insensitive. Including kind keywords means typing
+  // "shell" (or "sh") narrows to shell tabs regardless of their name.
+  // Deep-search (below) still scans message content — this only narrows
+  // the visible list. We keep the original sessions array intact for
+  // shortcut lookups (focusedRowEntry, menu rowId resolution).
   const q = filter.trim().toLowerCase();
   const visibleSessions = q && sessions
     ? sessions.filter((s) => {
-        const hay = ((s.name || '') + ' ' + (s.cwd || '')).toLowerCase();
+        const hay = ((s.name || '') + ' ' + (s.cwd || '') + ' ' + kindKeyword(s)).toLowerCase();
         return hay.includes(q);
       })
     : sessions;
@@ -1047,8 +1066,8 @@ export default function Sidebar({
             'No archived sessions.'
           ) : (
             <>
-              No sessions yet. Run <code>claude</code> in your terminal, or click{' '}
-              <em>+ New session</em>.
+              No sessions yet. Run <code>claude</code> in your terminal, or use
+              the icons above (✦ Claude · $_ shell · ↪ bind).
             </>
           )}
         </div>
