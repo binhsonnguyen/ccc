@@ -1006,6 +1006,47 @@ code {
   }
 }
 
+/* Touch / coarse-pointer pass: enlarge critical hit-targets to ~44px
+   per HIG and surface hover-gated affordances unconditionally. Gated
+   on (hover: none) + (pointer: coarse) so desktop / hybrid-trackpad
+   Macs are unaffected (those report hover: hover). Personal-tool
+   scope — covers the obvious blockers, not a phone-first redesign. */
+@media (hover: none) and (pointer: coarse) {
+  .sidebar-kind-icon {
+    width: 44px;
+    height: 44px;
+  }
+  .hamburger {
+    min-width: 44px;
+    min-height: 44px;
+    font-size: 20px;
+  }
+  /* Bump workspace padding to match the taller hamburger. */
+  .app.narrow .workspace {
+    padding-top: 52px;
+  }
+  .tab-close,
+  .tab-kill {
+    min-width: 36px;
+    min-height: 28px;
+    padding: 4px 8px;
+  }
+  /* Row context-menu trigger is normally hover-revealed (opacity:0
+     until :hover/:focus-within on the row). On touch there is no
+     hover; always show it. Width already reserved in row layout, so
+     no reflow. */
+  .session-menu-btn {
+    opacity: 1;
+    min-width: 36px;
+    min-height: 36px;
+  }
+  .statusbar-cwd,
+  .statusbar-theme,
+  button.statusbar-dims {
+    padding: 6px 8px;
+  }
+}
+
 /* ---- D-3/4/5 sidebar additions --------------------------------------- */
 
 .sidebar-controls {
