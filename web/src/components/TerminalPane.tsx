@@ -352,13 +352,18 @@ export default function TerminalPane({
       }
     };
 
-    const collectImages = (dt: DataTransfer | null): File[] => {
+    // Collect any file blobs from the DataTransfer. Originally filtered
+    // on `image/*` (v0.2.9 ship was image-only); v0.2.22 lifted the
+    // filter so any file kind can be attached — claude handles text /
+    // logs / json / binary just as well via its Read tool once we
+    // inject the @<path>.
+    const collectFiles = (dt: DataTransfer | null): File[] => {
       if (!dt) return [];
       const out: File[] = [];
       if (dt.items && dt.items.length > 0) {
         for (let i = 0; i < dt.items.length; i++) {
           const it = dt.items[i];
-          if (it.kind === 'file' && it.type.startsWith('image/')) {
+          if (it.kind === 'file') {
             const f = it.getAsFile();
             if (f) out.push(f);
           }
@@ -366,8 +371,7 @@ export default function TerminalPane({
       }
       if (out.length === 0 && dt.files && dt.files.length > 0) {
         for (let i = 0; i < dt.files.length; i++) {
-          const f = dt.files[i];
-          if (f.type.startsWith('image/')) out.push(f);
+          out.push(dt.files[i]);
         }
       }
       return out;
@@ -380,13 +384,13 @@ export default function TerminalPane({
           sendStdin(`@${p} `);
         }
         const n = paths.length;
-        showToast(n === 1 ? 'Added 1 image' : `Added ${n} images`, {
+        showToast(n === 1 ? 'Added 1 file' : `Added ${n} files`, {
           variant: 'success',
         });
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        console.error('c3: image upload failed', e);
-        showToast(`Image upload failed — ${msg}`, { variant: 'error' });
+        console.error('c3: file upload failed', e);
+        showToast(`File upload failed — ${msg}`, { variant: 'error' });
       }
     };
 
@@ -398,7 +402,7 @@ export default function TerminalPane({
     };
 
     const onPaste = (ev: ClipboardEvent) => {
-      const files = collectImages(ev.clipboardData);
+      const files = collectFiles(ev.clipboardData);
       if (files.length === 0) return;
       ev.preventDefault();
       ev.stopPropagation();
@@ -428,7 +432,7 @@ export default function TerminalPane({
       // visual cue clears.
       dragDepthRef.current = 0;
       setDragActive(false);
-      const files = collectImages(ev.dataTransfer);
+      const files = collectFiles(ev.dataTransfer);
       if (files.length === 0) return;
       ev.preventDefault();
       ev.stopPropagation();
@@ -642,7 +646,7 @@ export default function TerminalPane({
       <div className="pane-host-inner" ref={hostRef}>
         {dragActive && (
           <div className="drop-target" aria-hidden="true">
-            <div className="drop-target-text">Drop image to attach</div>
+            <div className="drop-target-text">Drop file to attach</div>
           </div>
         )}
       </div>
