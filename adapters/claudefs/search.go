@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // SearchMatch is one session-level hit returned by Search().
@@ -74,16 +75,16 @@ func (r *Repo) Search(query string, limit int) ([]SearchMatch, bool, error) {
 
 	needle := strings.ToLower(q)
 
-	// Sessions already arrive sorted by Modified desc from Scan(); keep
-	// that ordering so the most-recently-active sessions get scanned
-	// first. This way `truncated=true` drops the oldest matches.
-	type result struct {
-		match SearchMatch
-		// keep the original sort key in case we want to re-sort later;
-		// for now Scan()'s order is already mtime-desc so we don't.
-	}
-	var results []result
-	totalHits := 0
+	// Sessions arrive sorted by Modified desc from Scan(); keep that
+	// ordering so the most-recently-active sessions get scanned first.
+	// Truncation drops oldest matches. We stop AT THE FIRST OVERFLOW HIT:
+	// one extra `searchFile` call confirms there's at least one match
+	// beyond `limit`, then we set truncated=true and break. Prior version
+	// kept scanning every remaining JSONL just to count — wasted I/O and
+	// alloc per session with no observable difference (wire format only
+	// exposes the boolean).
+	out := make([]SearchMatch, 0, limit)
+	truncated := false
 
 	for _, s := range sessions {
 		if s.Sidechain {
@@ -96,34 +97,26 @@ func (r *Repo) Search(query string, limit int) ([]SearchMatch, bool, error) {
 		if !ok {
 			continue
 		}
-		totalHits++
-		if len(results) >= limit {
-			// keep counting so we know whether to flag truncated, but
-			// don't accumulate any more snippets.
-			continue
+		if len(out) >= limit {
+			truncated = true
+			break
 		}
-		results = append(results, result{
-			match: SearchMatch{
-				ClaudeUUID: s.UUID,
-				CWD:        s.CWD,
-				Summary:    s.Summary,
-				Snippet:    snippet,
-				MatchedAt:  s.Modified,
-			},
+		out = append(out, SearchMatch{
+			ClaudeUUID: s.UUID,
+			CWD:        s.CWD,
+			Summary:    s.Summary,
+			Snippet:    snippet,
+			MatchedAt:  s.Modified,
 		})
 	}
 
-	out := make([]SearchMatch, len(results))
-	for i, r := range results {
-		out[i] = r.match
-	}
 	// Defensive resort by MatchedAt desc — Scan order should already be
 	// this way but if a session lacks a Modified time it'd otherwise
 	// drift to wherever Scan put it.
 	sort.SliceStable(out, func(i, j int) bool {
 		return out[i].MatchedAt.After(out[j].MatchedAt)
 	})
-	return out, totalHits > len(results), nil
+	return out, truncated, nil
 }
 
 // searchFile streams a JSONL file line by line and returns the snippet
@@ -171,6 +164,17 @@ func buildSnippet(line string, matchIdx, matchLen int) string {
 	end := matchIdx + matchLen + snippetRadius
 	if end > len(line) {
 		end = len(line)
+	}
+	// Snap bounds outward to the nearest UTF-8 rune boundary. Without
+	// this, a window cut mid-rune (Vietnamese/CJK/emoji ≥ 2 bytes per
+	// codepoint) produces U+FFFD glyphs when the snippet is later ranged
+	// for ANSI strip + whitespace collapse. Snapping outward never
+	// truncates the match itself; at most 3 byte tests per edge.
+	for start > 0 && !utf8.RuneStart(line[start]) {
+		start--
+	}
+	for end < len(line) && !utf8.RuneStart(line[end]) {
+		end++
 	}
 	window := line[start:end]
 	window = ansiRe.ReplaceAllString(window, "")
