@@ -17,14 +17,15 @@ import { createPortal } from 'react-dom';
 import { formatKeys, useShortcut } from '../lib/shortcuts';
 import type { ThemeName } from '../lib/themes';
 import type { C3Entry, Tab } from '../types';
+import { primaryPane } from '../types';
 
 export interface PaletteActions {
   refresh: () => void;
   toggleSidebar: () => void;
   openNewSession: () => void;
   setView: (v: 'active' | 'archived') => void;
-  closeTab: (uuid: string) => void;
-  killTab: (uuid: string) => void;
+  closeTab: (tabId: string) => void;
+  killTab: (tabId: string) => void;
   closeAllTabs: () => void;
   archiveActive: () => void;
   copyCwd: (cwd: string) => void;
@@ -41,11 +42,11 @@ interface Props {
   onClose: () => void;
   sessions: C3Entry[] | null;
   tabs: Tab[];
-  activeUuid: string | null;
+  activeTabId: string | null;
   view: 'active' | 'archived';
   themeName: ThemeName;
   onOpenSession: (entry: C3Entry) => void;
-  onSwitchTab: (uuid: string) => void;
+  onSwitchTab: (tabId: string) => void;
   actions: PaletteActions;
 }
 
@@ -110,7 +111,7 @@ export default function Palette({
   onClose,
   sessions,
   tabs,
-  activeUuid,
+  activeTabId,
   view,
   themeName,
   onOpenSession,
@@ -198,25 +199,27 @@ export default function Palette({
     // Tabs (only meaningful in open state — switch vs open differs)
     const tabList: Item[] = [];
     for (const t of tabs) {
-      const hay = '[tab] ' + (t.name || '') + ' ' + (t.cwd || '');
+      const primary = primaryPane(t);
+      const hay = '[tab] ' + (primary.name || '') + ' ' + (primary.cwd || '');
       const score = fuzzyMatch(q, hay);
       if (score <= 0) continue;
       tabList.push({
-        id: 'tab:' + t.claudeUuid,
+        id: 'tab:' + t.id,
         group: 'Tabs',
-        label: '[tab] ' + (t.name || t.c3Id),
-        detail: t.cwd,
+        label: '[tab] ' + (primary.name || primary.c3Id),
+        detail: primary.cwd,
         score,
-        run: () => onSwitchTab(t.claudeUuid),
+        run: () => onSwitchTab(t.id),
       });
     }
     tabList.sort((a, b) => b.score - a.score);
     out.push(...tabList.slice(0, TAB_LIMIT));
 
     // Actions
-    const activeTab = tabs.find((t) => t.claudeUuid === activeUuid) ?? null;
-    const activeSess = activeTab
-      ? sessions?.find((s) => s.id === activeTab.c3Id) ?? null
+    const activeTab = tabs.find((t) => t.id === activeTabId) ?? null;
+    const activeTabPrimary = activeTab ? primaryPane(activeTab) : null;
+    const activeSess = activeTabPrimary
+      ? sessions?.find((s) => s.id === activeTabPrimary.c3Id) ?? null
       : null;
     type ActionDef = { label: string; hint?: string; when?: boolean; run: () => void };
     const acts: ActionDef[] = [
@@ -231,12 +234,12 @@ export default function Palette({
         label: 'Close active tab',
         hint: 'Delete',
         when: !!activeTab,
-        run: () => activeTab && actions.closeTab(activeTab.claudeUuid),
+        run: () => activeTab && actions.closeTab(activeTab.id),
       },
       {
         label: 'Kill active tab',
         when: !!activeTab,
-        run: () => activeTab && actions.killTab(activeTab.claudeUuid),
+        run: () => activeTab && actions.killTab(activeTab.id),
       },
       {
         label: 'Close all tabs',
@@ -250,8 +253,8 @@ export default function Palette({
       },
       {
         label: 'Copy active cwd',
-        when: !!(activeTab && activeTab.cwd),
-        run: () => activeTab && actions.copyCwd(activeTab.cwd),
+        when: !!(activeTabPrimary && activeTabPrimary.cwd),
+        run: () => activeTabPrimary && actions.copyCwd(activeTabPrimary.cwd),
       },
       { label: 'Show keyboard shortcuts', hint: '?', run: actions.openCheatsheet },
       // Theme switchers. The current theme is omitted (no reason to
@@ -288,7 +291,7 @@ export default function Palette({
     out.push(...actList.slice(0, ACT_LIMIT));
 
     return out;
-  }, [open, query, sessions, tabs, activeUuid, view, onOpenSession, onSwitchTab, actions]);
+  }, [open, query, sessions, tabs, activeTabId, themeName, view, onOpenSession, onSwitchTab, actions]);
 
   // Clamp cursor when items change.
   useEffect(() => {

@@ -81,18 +81,22 @@ interface CreateSessionOpts {
   // auto-submits in the TUI (no pending banner).
   firstPrompt?: string;
   claudeUuid?: string;
+  // kind: 'claude' (default, omitted) or 'shell'.
+  kind?: 'claude' | 'shell';
 }
 
 export async function createSession(opts: CreateSessionOpts): Promise<C3Entry> {
+  const body: Record<string, unknown> = {
+    cwd: opts.cwd,
+    name: opts.name,
+    firstPrompt: opts.firstPrompt ?? '',
+    claudeUuid: opts.claudeUuid ?? '',
+  };
+  if (opts.kind) body.kind = opts.kind;
   const r = await fetch('/api/sessions', {
     method: 'POST',
     headers: JSON_HEADERS,
-    body: JSON.stringify({
-      cwd: opts.cwd,
-      name: opts.name,
-      firstPrompt: opts.firstPrompt ?? '',
-      claudeUuid: opts.claudeUuid ?? '',
-    }),
+    body: JSON.stringify(body),
   });
   if (!r.ok) throw await readError(r);
   return (await r.json()) as C3Entry;

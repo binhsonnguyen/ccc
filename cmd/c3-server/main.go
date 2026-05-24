@@ -139,6 +139,7 @@ func run() error {
 	mux.HandleFunc("/api/sessions", handleSessionsCollection(originHost, originHostAlt))
 	mux.HandleFunc("/api/sessions/", routeSession(originHost, originHostAlt))
 	mux.HandleFunc("/api/claude-sessions", handleClaudeSessions)
+	mux.HandleFunc("/api/layout", handleLayout(originHost, originHostAlt))
 	mux.HandleFunc("/assets/", handleAssets)
 	mux.HandleFunc("/", handleIndex)
 
@@ -1018,6 +1019,138 @@ func writePortFile(path string, port int) error {
 	}
 	content := fmt.Sprintf("%d\n%d\n", port, os.Getpid())
 	return os.WriteFile(path, []byte(content), 0o644)
+}
+
+// ---------------------------------------------------------------------------
+// Split-panel layout sidecar (v0.2.23)
+// ---------------------------------------------------------------------------
+//
+// GET /api/layout → 200 with the stored JSON body, or 204 when no file
+// PUT /api/layout → 204 after atomic write (tempfile + rename). Body is
+//                   capped at 64 KiB and parsed as opaque JSON; the
+//                   server only validates "is a JSON object", never the
+//                   v1 schema. Client (web/src/lib/layout.ts) is the
+//                   single source of schema knowledge so v2 won't need
+//                   a server change.
+//
+// File path: $XDG_DATA_HOME/c3/layout.json, fallback ~/.local/share/c3/layout.json.
+
+const layoutMaxBytes = 64 * 1024
+
+func layoutFilePath() (string, error) {
+	if d := os.Getenv("XDG_DATA_HOME"); d != "" {
+		return filepath.Join(d, "c3", "layout.json"), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".local", "share", "c3", "layout.json"), nil
+}
+
+func handleLayout(originHost, originHostAlt string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			handleLayoutGet(w, r)
+		case http.MethodPut:
+			if !checkSameOrigin(w, r, originHost, originHostAlt) {
+				return
+			}
+			handleLayoutPut(w, r)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	}
+}
+
+func handleLayoutGet(w http.ResponseWriter, r *http.Request) {
+	_ = r
+	path, err := layoutFilePath()
+	if err != nil {
+		httpError(w, err, http.StatusInternalServerError)
+		return
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		httpError(w, err, http.StatusInternalServerError)
+		return
+	}
+	if len(b) == 0 {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = w.Write(b)
+}
+
+func handleLayoutPut(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, int64(layoutMaxBytes))
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		// MaxBytesReader returns http.MaxBytesError-ish on overflow; the
+		// concrete type isn't exported pre-Go 1.20 but the message includes
+		// "request body too large". Translate to 413 either way.
+		if strings.Contains(err.Error(), "too large") {
+			http.Error(w, "layout payload exceeds 64 KiB", http.StatusRequestEntityTooLarge)
+			return
+		}
+		http.Error(w, "read body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if len(body) == 0 {
+		http.Error(w, "empty body", http.StatusBadRequest)
+		return
+	}
+	// Parse as opaque JSON object. We don't enforce the v1 schema — the
+	// client owns that — but a malformed payload would corrupt the file
+	// and break the next GET, so reject upfront.
+	var probe map[string]any
+	if err := json.Unmarshal(body, &probe); err != nil {
+		http.Error(w, "invalid json: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	path, err := layoutFilePath()
+	if err != nil {
+		httpError(w, err, http.StatusInternalServerError)
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		httpError(w, err, http.StatusInternalServerError)
+		return
+	}
+	// Atomic write: tempfile in the same dir, then rename. rename(2) on
+	// POSIX gives us "either the old file or the new file" — never a
+	// truncated half-write — so concurrent GETs from another browser
+	// window can't observe partial JSON.
+	tmp, err := os.CreateTemp(filepath.Dir(path), "layout-*.tmp")
+	if err != nil {
+		httpError(w, err, http.StatusInternalServerError)
+		return
+	}
+	tmpPath := tmp.Name()
+	if _, err := tmp.Write(body); err != nil {
+		tmp.Close()
+		_ = os.Remove(tmpPath)
+		httpError(w, err, http.StatusInternalServerError)
+		return
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		httpError(w, err, http.StatusInternalServerError)
+		return
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		_ = os.Remove(tmpPath)
+		httpError(w, err, http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // ---------------------------------------------------------------------------

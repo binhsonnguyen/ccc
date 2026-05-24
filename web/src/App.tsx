@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import Sidebar, { type SidebarView } from './components/Sidebar';
 import StatusBar from './components/StatusBar';
 import TabBar from './components/TabBar';
-import TerminalPane from './components/TerminalPane';
+import SplitContainer from './components/SplitContainer';
 import Welcome from './components/Welcome';
 import NewSessionPane from './components/NewSessionPane';
 import Palette, { type PaletteActions } from './components/Palette';
@@ -15,18 +15,32 @@ import {
   writeColCap,
   writeRowCap,
 } from './lib/caps';
-import { archiveSession, listSessions } from './lib/api';
+import { archiveSession, createSession, listSessions } from './lib/api';
 import { useShortcut } from './lib/shortcuts';
 import { disposeTerm, getTerm } from './lib/terminals';
 import { applyTheme, getCurrentTheme, type ThemeName } from './lib/themes';
 import { useZenMode } from './lib/useZenMode';
 import { parseTabUrl, writeTabUrl } from './lib/url-state';
-import type { C3Entry, Tab, TabStatus } from './types';
+import {
+  loadLayout,
+  paneFromEntry,
+  rehydrateTabs,
+  useLayoutSync,
+} from './lib/layout';
+import {
+  findPane,
+  focusedPane,
+  newTabId,
+  primaryPane,
+  type C3Entry,
+  type Pane,
+  type Tab,
+  type TabStatus,
+} from './types';
 
 const NARROW_BP = 800;
 const SIDEBAR_LS_KEY = 'c3:sidebar-open';
 const SIDEBAR_WIDTH_LS_KEY = 'c3:sidebar-width';
-const TAB_ORDER_SS_KEY = 'c3:tab-order';
 const SIDEBAR_WIDTH_DEFAULT = 280;
 const SIDEBAR_WIDTH_MIN = 200;
 const SIDEBAR_WIDTH_MAX = 480;
@@ -54,26 +68,6 @@ function writeSidebarWidth(n: number) {
   }
 }
 
-function readTabOrder(): string[] {
-  try {
-    const v = sessionStorage.getItem(TAB_ORDER_SS_KEY);
-    if (!v) return [];
-    const arr = JSON.parse(v);
-    if (Array.isArray(arr) && arr.every((s) => typeof s === 'string')) return arr;
-  } catch {
-    /* ignore */
-  }
-  return [];
-}
-
-function writeTabOrder(uuids: string[]) {
-  try {
-    sessionStorage.setItem(TAB_ORDER_SS_KEY, JSON.stringify(uuids));
-  } catch {
-    /* ignore */
-  }
-}
-
 function readSidebarPref(): boolean | null {
   try {
     const v = localStorage.getItem(SIDEBAR_LS_KEY);
@@ -93,48 +87,65 @@ function writeSidebarPref(v: boolean) {
   }
 }
 
+// Map a pane mutation across the tabs tree. Helper so the dozen
+// onStatus/onMention/onExit/etc handlers stay tiny — they all walk the
+// flat panes-of-tabs structure to find their target.
+function patchPaneByC3(tabs: Tab[], c3Id: string, patch: Partial<Pane>): Tab[] {
+  let changed = false;
+  const next = tabs.map((t) => {
+    const p0 = t.panes[0];
+    const p1: Pane | null = t.panes.length === 2 ? t.panes[1]! : null;
+    if (p0.c3Id === c3Id) {
+      changed = true;
+      const updated: Pane = { ...p0, ...patch };
+      return p1
+        ? { ...t, panes: [updated, p1] as [Pane, Pane] }
+        : { ...t, panes: [updated] as [Pane] };
+    }
+    if (p1 && p1.c3Id === c3Id) {
+      changed = true;
+      const updated: Pane = { ...p1, ...patch };
+      return { ...t, panes: [p0, updated] as [Pane, Pane] };
+    }
+    return t;
+  });
+  return changed ? next : tabs;
+}
+
+// Like patchPaneByC3 but matches on claudeUuid (used by ws onmessage
+// handlers which only know the claude uuid). Patches ALL matching
+// panes — claudeUuid is normally unique but during a discovery
+// rekey window two panes can briefly share a value.
+function patchPanesByUuid(tabs: Tab[], uuid: string, patch: (p: Pane) => Pane): Tab[] {
+  let changed = false;
+  const next = tabs.map((t) => {
+    const p0 = t.panes[0];
+    const p1 = t.panes.length === 2 ? t.panes[1]! : null;
+    const np0 = p0.claudeUuid === uuid ? patch(p0) : p0;
+    const np1 = p1 && p1.claudeUuid === uuid ? patch(p1) : p1;
+    if (np0 === p0 && np1 === p1) return t;
+    changed = true;
+    return np1
+      ? { ...t, panes: [np0, np1] as [Pane, Pane] }
+      : { ...t, panes: [np0] as [Pane] };
+  });
+  return changed ? next : tabs;
+}
+
 function AppInner() {
-  // null = initial fetch in flight (Sidebar renders skeleton); [] = empty.
   const [sessions, setSessions] = useState<C3Entry[] | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => readSidebarWidth());
   const [tabs, setTabs] = useState<Tab[]>([]);
-  const [activeUuid, setActiveUuid] = useState<string | null>(null);
-  // URL hash is the source of truth for which tabs/active are open across
-  // reloads. Parse synchronously on first render so we know what to open
-  // as soon as the sessions list arrives (see hydration effect below).
-  // localStorage tab order is honored only as a fallback when the hash is
-  // empty (legacy users); the next reload writes the URL and that path
-  // becomes irrelevant.
+  const [activeTabId, setActiveTabId] = useState<string | null>(null);
+
   const initialUrlStateRef = useRef(
     typeof window !== 'undefined' ? parseTabUrl(window.location.hash) : { ids: [], active: null },
   );
   const [view, setView] = useState<SidebarView>('active');
-  // Power-tool overlays (PLAN.md P-1, P-2). Mutually exclusive: opening
-  // one closes the other so we never stack two centered modals.
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [cheatsheetOpen, setCheatsheetOpen] = useState(false);
-  // Increments whenever Welcome asks Sidebar to open the new-session
-  // form. Sidebar watches this counter via effect and toggles its own
-  // `creating` state. Counter (not bool) so repeated clicks always
-  // re-trigger even when Sidebar already had it open then closed.
-  // openNewSessionTick still drives the legacy Sidebar inline-form
-  // path when onRequestCreate isn't wired (defensive — App always
-  // passes it now, but the Sidebar prop is optional). The setter is
-  // intentionally unused: the inline first-prompt flow supersedes it,
-  // but we keep the prop wire so a future hotfix can re-enable the
-  // old path without re-threading state.
   const [openNewSessionTick] = useState(0);
-  // Inline first-prompt new-session flow. When true, the main pane
-  // renders NewSessionPane in place of Welcome/TerminalPane. Cleared
-  // on Cancel, on successful submit (we swap to the freshly opened
-  // tab), and whenever the user switches to a different tab via the
-  // tab bar / palette / keyboard. Always render NewSessionPane EXCLUSIVE
-  // of the terminal panes — never stack both.
   const [creatingSession, setCreatingSession] = useState(false);
-  // Bumped when the user clicks "New Claude session" while the pane is
-  // already open. NewSessionPane uses it as a key on a one-shot border-
-  // pulse overlay so the user gets a "yes I noticed, but it's already
-  // here" visual rather than a silent no-op.
   const [paneFlashKey, setPaneFlashKey] = useState(0);
   const startCreatingSession = useCallback(() => {
     setCreatingSession((wasOpen) => {
@@ -144,23 +155,15 @@ function AppInner() {
       }
       return true;
     });
-    setActiveUuid(null);
+    setActiveTabId(null);
   }, []);
 
-  // Theme. initThemeEarly() in main.tsx already set the <html> class
-  // and the in-module `current` from localStorage before React mounted,
-  // so reading getCurrentTheme() here is consistent with first paint —
-  // no flicker. setThemeName re-applies (idempotent) which also walks
-  // any live terms; on first render the Map is empty so it's a no-op.
   const [themeName, setThemeName] = useState<ThemeName>(() => getCurrentTheme());
   const onThemeChange = useCallback((next: ThemeName) => {
     applyTheme(next);
     setThemeName(next);
   }, []);
 
-  // PTY dim caps. Global, persisted in localStorage. null = follow
-  // viewport. The dialog (PtyDimsDialog) edits a draft and writes here
-  // on Apply; TerminalPane refits + re-resizes via a deps-watching effect.
   const [colCap, setColCap] = useState<number | null>(() => readColCap());
   const [rowCap, setRowCap] = useState<number | null>(() => readRowCap());
   const [dimsDialogOpen, setDimsDialogOpen] = useState(false);
@@ -169,8 +172,6 @@ function AppInner() {
     setRowCap(r); writeRowCap(r);
   }, []);
 
-  // Sidebar/drawer state. Default: respect user pref if set, otherwise
-  // open on wide viewports, closed on narrow.
   const [narrow, setNarrow] = useState(
     () => typeof window !== 'undefined' && window.innerWidth < NARROW_BP,
   );
@@ -179,55 +180,84 @@ function AppInner() {
     if (pref !== null) return pref;
     return typeof window !== 'undefined' ? window.innerWidth >= NARROW_BP : true;
   });
-  // userTouched: once the user manually toggled, we stop auto-syncing on
-  // resize so we don't fight their intent.
   const userTouched = useRef(readSidebarPref() !== null);
 
   const { showToast } = useToast();
 
-  // C-4 zen-mode auto-fade. Hook owns the timer + listeners; we apply
-  // its boolean as a class on .app and let CSS handle the transition.
   const zenFaded = useZenMode();
 
-  // C-5: clear mention count on activation, and bump on incoming
-  // matches. `activateTab` wraps setActiveUuid so every code path
-  // that switches tabs (TabBar click, keyboard nav, palette, etc.)
-  // goes through the reset — no need to remember to call both.
-  const activateTab = useCallback((uuid: string | null) => {
-    setActiveUuid(uuid);
-    // Activating any tab (or explicitly clearing) means the user has
-    // committed to viewing terminal content — close the new-session
-    // pane if it was open. Counter-review #9.
-    if (uuid !== null) setCreatingSession(false);
-    if (uuid === null) return;
+  // activateTab clears the focused pane's mention badge.
+  const activateTab = useCallback((tabId: string | null) => {
+    setActiveTabId(tabId);
+    if (tabId !== null) setCreatingSession(false);
+    if (tabId === null) return;
     setTabs((prev) =>
-      prev.map((t) =>
-        t.claudeUuid === uuid && t.mentions ? { ...t, mentions: 0 } : t,
-      ),
+      prev.map((t) => {
+        if (t.id !== tabId) return t;
+        const idx = t.focusedPaneIdx;
+        const cur = t.panes[idx]!;
+        if (!cur.mentions) return t;
+        const cleared: Pane = { ...cur, mentions: 0 };
+        return idx === 0
+          ? (t.panes.length === 2
+              ? { ...t, panes: [cleared, t.panes[1]!] as [Pane, Pane] }
+              : { ...t, panes: [cleared] as [Pane] })
+          : { ...t, panes: [t.panes[0], cleared] as [Pane, Pane] };
+      }),
     );
   }, []);
 
-  // activeUuid via ref so onMention's identity stays stable across
-  // tab switches. If it depended on activeUuid directly, every switch
-  // would invalidate openWS in TerminalPane (which closes over
-  // onMention) and rebuild the whole effect — closing + reopening the
-  // WebSocket and term.reset()-ing every pane on every click.
-  const activeUuidRef = useRef(activeUuid);
+  // Focus a specific pane (by c3Id) within whatever tab owns it.
+  // Activates the tab as a side-effect so click-to-focus on a hidden
+  // pane (e.g. via overflow menu) does the expected thing.
+  const focusPane = useCallback((c3Id: string) => {
+    setTabs((prev) => {
+      const hit = findPane(prev, c3Id);
+      if (!hit) return prev;
+      const { tab, idx } = hit;
+      // Activate the owning tab as a side-effect — queueMicrotask so we
+      // don't nest setState calls inside this updater.
+      if (activeTabIdRef.current !== tab.id) {
+        queueMicrotask(() => setActiveTabId(tab.id));
+      }
+      const pane = tab.panes[idx]!;
+      const focusChanged = tab.focusedPaneIdx !== idx;
+      const cleared: Pane = pane.mentions ? { ...pane, mentions: 0 } : pane;
+      if (!focusChanged && cleared === pane) return prev;
+      return prev.map((t) => {
+        if (t.id !== tab.id) return t;
+        const newFocus = (focusChanged ? idx : t.focusedPaneIdx) as 0 | 1;
+        if (idx === 0) {
+          return t.panes.length === 2
+            ? { ...t, focusedPaneIdx: newFocus, panes: [cleared, t.panes[1]!] as [Pane, Pane] }
+            : { ...t, focusedPaneIdx: 0, panes: [cleared] as [Pane] };
+        }
+        return { ...t, focusedPaneIdx: newFocus, panes: [t.panes[0], cleared] as [Pane, Pane] };
+      });
+    });
+  }, []);
+
+  // Track active tab id via ref for the WS onmessage handler.
+  const activeTabIdRef = useRef(activeTabId);
   useEffect(() => {
-    activeUuidRef.current = activeUuid;
-  }, [activeUuid]);
+    activeTabIdRef.current = activeTabId;
+  }, [activeTabId]);
+
   const onMention = useCallback((uuid: string, delta: number) => {
-    if (uuid === activeUuidRef.current) return;
+    // Skip the bump entirely if the matching pane is currently the
+    // focused pane in the active tab — the user is already watching it.
     setTabs((prev) =>
-      prev.map((t) =>
-        t.claudeUuid === uuid
-          ? { ...t, mentions: (t.mentions ?? 0) + delta }
-          : t,
-      ),
+      patchPanesByUuid(prev, uuid, (p) => {
+        const hit = findPane(prev, p.c3Id);
+        if (hit && hit.tab.id === activeTabIdRef.current && hit.tab.focusedPaneIdx === hit.idx) {
+          return p;
+        }
+        return { ...p, mentions: (p.mentions ?? 0) + delta };
+      }),
     );
   }, []);
 
-  // ---- session list polling ------------------------------------------------
+  // ---- session list polling + discovery rekey -----------------------------
   const refresh = useCallback(async () => {
     try {
       const data = await listSessions({
@@ -235,25 +265,32 @@ function AppInner() {
         includeLive: true,
       });
       setSessions(data);
-      // Discovery upgrade: if any open tab is keyed by a c3 id (pending)
-      // and the server has now linked a uuid, swap the tab's keying so
-      // future reattach paths through the canonical uuid. We match by
-      // c3Id; this is cheap, runs every 5s, and is idempotent.
+      // Discovery rekey: if any pane is keyed by a c3 id (pending) and
+      // the server has now linked a uuid, swap the pane's claudeUuid so
+      // future reattach paths through the canonical uuid. Walks all
+      // panes (primary + secondary).
       setTabs((prev) =>
         prev.map((t) => {
-          if (t.claudeUuid && t.claudeUuid !== t.c3Id) return t;
-          const match = data.find((e) => e.id === t.c3Id);
-          if (match && match.claudeUuid && match.claudeUuid !== t.claudeUuid) {
-            return { ...t, claudeUuid: match.claudeUuid };
-          }
-          return t;
+          const p0 = t.panes[0];
+          const p1 = t.panes.length === 2 ? t.panes[1]! : null;
+          const patch = (p: Pane): Pane => {
+            if (p.claudeUuid && p.claudeUuid !== p.c3Id) return p;
+            const match = data.find((e) => e.id === p.c3Id);
+            if (match && match.claudeUuid && match.claudeUuid !== p.claudeUuid) {
+              return { ...p, claudeUuid: match.claudeUuid };
+            }
+            return p;
+          };
+          const np0 = patch(p0);
+          const np1 = p1 ? patch(p1) : null;
+          if (np0 === p0 && np1 === p1) return t;
+          return np1
+            ? { ...t, panes: [np0, np1] as [Pane, Pane] }
+            : { ...t, panes: [np0] as [Pane] };
         }),
       );
     } catch (err) {
       console.error(err);
-      // Flip skeleton off into an empty state so the user sees the
-      // sidebar's "no sessions" hint plus the Retry toast, instead of
-      // shimmer rows hanging forever when the very first fetch fails.
       setSessions((prev) => prev ?? []);
       showToast('Failed to load sessions', {
         variant: 'error',
@@ -279,8 +316,6 @@ function AppInner() {
       const nowNarrow = window.innerWidth < NARROW_BP;
       setNarrow((wasNarrow) => {
         if (wasNarrow !== nowNarrow && !userTouched.current) {
-          // Only adjust open state on threshold cross if user hasn't taken
-          // manual control. Avoids surprise-open when dragging window.
           setSidebarOpen(!nowNarrow);
         }
         return nowNarrow;
@@ -290,20 +325,12 @@ function AppInner() {
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
-  // ---- drawer ESC (only when drawer-style + open) -------------------------
-  // Migrated to the shortcut registry (PLAN.md P-3). `when` gates this
-  // entry to drawer mode + open state so it doesn't race with the
-  // terminal-dead overlay ESC handler in TerminalPane.
   useShortcut(
     {
       id: 'drawer.close',
       keys: 'Escape',
       scope: 'global',
       label: 'Close sidebar drawer',
-      // Esc dispatch is fire-all (see lib/shortcuts.ts). When the
-      // palette or cheatsheet is open, their own Esc handlers should
-      // be the only ones to fire — otherwise Esc closes both the
-      // overlay and the drawer underneath, which is jarring.
       when: () => narrow && sidebarOpen && !paletteOpen && !cheatsheetOpen,
       handler: () => {
         setSidebarOpen(false);
@@ -323,13 +350,6 @@ function AppInner() {
     });
   }, []);
 
-  // ⌘B / Ctrl+B toggles the sidebar (B-3). Works in wide mode (hide /
-  // show via .sidebar-hidden) and in drawer mode (open / close drawer).
-  //
-  // `when` excludes the case where xterm has focus — on Linux/Windows
-  // Mod resolves to Ctrl, and Ctrl+B is the tmux prefix + the bash
-  // backward-char binding. Stealing it from the terminal would silently
-  // break common workflows.
   useShortcut(
     {
       id: 'sidebar.toggle',
@@ -345,10 +365,6 @@ function AppInner() {
     [toggleSidebar],
   );
 
-  // Palette + cheatsheet open shortcuts. Both guard against input focus
-  // so typing `?` in the new-session name field or `Mod+k` in the
-  // sidebar filter doesn't yank the user into an overlay. xterm renders
-  // its own textarea — same guard catches it.
   const notInInput = () => {
     const el = document.activeElement as HTMLElement | null;
     if (!el) return true;
@@ -380,9 +396,6 @@ function AppInner() {
   useShortcut(
     {
       id: 'cheatsheet.open',
-      // `?` on US layouts is Shift+/, so the dispatcher's canonical
-      // form is "Shift+?", not "?". Register both so the on-screen
-      // hint and the actual binding agree.
       keys: 'Shift+?',
       scope: 'global',
       label: 'Show keyboard shortcuts',
@@ -410,138 +423,171 @@ function AppInner() {
     writeSidebarPref(false);
   }, [narrow]);
 
-  // ---- tab management ------------------------------------------------------
-  // We allow opening tabs for pending entries (claudeUuid empty). The
-  // server keys those PTYs by c3 id under the hood (D-7); on the client
-  // we use the c3 id as the tab's dedup key until refresh upgrades it.
+  // ---- tab / pane management ----------------------------------------------
+  // openTab is the single-attach bottleneck. If the entry's c3Id is
+  // already in any open pane we switch-to instead of duplicating. The
+  // Sidebar's row dim is belt-and-suspenders.
   const openTab = useCallback((entry: C3Entry) => {
-    const key = entry.claudeUuid || entry.id;
     setTabs((prev) => {
-      if (prev.some((t) => t.claudeUuid === key || t.c3Id === entry.id)) return prev;
-      const isShell = entry.kind === 'shell';
-      const t: Tab = {
-        claudeUuid: key,
-        c3Id: entry.id,
-        name: entry.name || entry.id,
-        cwd: entry.cwd || '',
-        // Shell tabs never sit in the 'pending' state — there is no
-        // claude-side discovery handshake to wait for. They jump from
-        // 'connecting' (set by openWS) straight to 'connected'.
-        status: isShell || entry.claudeUuid ? 'connecting' : 'pending',
-        kind: isShell ? 'shell' : 'claude',
-      };
-      return [...prev, t];
-    });
-    activateTab(key);
-  }, [activateTab]);
-
-  const closeTab = useCallback(
-    (uuid: string) => {
-      disposeTerm(uuid);
-      setTabs((prev) => prev.filter((t) => t.claudeUuid !== uuid));
-      if (activeUuidRef.current === uuid) {
-        const remaining = tabs.filter((t) => t.claudeUuid !== uuid);
-        // Route through activateTab so the promoted tab also gets its
-        // mention badge cleared — same contract as TabBar/Palette/etc.
-        activateTab(remaining.length ? remaining[remaining.length - 1].claudeUuid : null);
+      const hit = findPane(prev, entry.id);
+      if (hit) {
+        // Activate the tab + focus the pane that owns this c3Id.
+        const nextTabs = prev.map((t) =>
+          t.id === hit.tab.id ? { ...t, focusedPaneIdx: hit.idx } : t,
+        );
+        // Defer active-id mutation outside this setter to avoid double
+        // batching collisions; queueMicrotask so the new tabs[] is
+        // committed first.
+        queueMicrotask(() => {
+          setActiveTabId(hit.tab.id);
+          const tabIdx = prev.findIndex((t) => t.id === hit.tab.id);
+          showToast(`Already open in tab ${tabIdx + 1}`, { variant: 'info' });
+        });
+        return nextTabs;
       }
-    },
-    [tabs, activateTab],
-  );
+      const newPane = paneFromEntry(entry);
+      const newTab: Tab = {
+        id: newTabId(),
+        panes: [newPane],
+        orientation: 'h',
+        ratio: 0.5,
+        focusedPaneIdx: 0,
+      };
+      queueMicrotask(() => setActiveTabId(newTab.id));
+      return [...prev, newTab];
+    });
+  }, [showToast]);
 
-  // Reorder lifted from TabBar (B-4). New uuid list = the dragged tab
-   // inserted at a new index. We map back into the Tab[] array — uuids
-   // not present in `next` (stale) are dropped, uuids present but not in
-   // current tabs (shouldn't happen) are ignored.
-  const reorderTabs = useCallback((nextUuids: string[]) => {
+  // closePane drops one pane from its tab. Last-pane close removes the
+  // whole tab. Primary close promotes secondary (panes.shift()).
+  // tabsRef mirrors tabs for closures that need to inspect current state
+  // without listing tabs as a dep (e.g. closePane reads it to find the
+  // dying pane's claudeUuid before mutating).
+  const tabsRef = useRef(tabs);
+  useEffect(() => {
+    tabsRef.current = tabs;
+  }, [tabs]);
+
+  const closePane = useCallback((c3Id: string) => {
+    const hit = findPane(tabsRef.current, c3Id);
+    if (!hit) return;
+    const { tab, idx } = hit;
+    disposeTerm(tab.panes[idx]!.claudeUuid);
     setTabs((prev) => {
-      const byUuid = new Map(prev.map((t) => [t.claudeUuid, t]));
+      const hitNow = findPane(prev, c3Id);
+      if (!hitNow) return prev;
+      const t = hitNow.tab;
+      const remaining = t.panes.length === 1
+        ? []
+        : hitNow.idx === 0
+          ? [t.panes[1]!]
+          : [t.panes[0]];
+      if (remaining.length === 0) {
+        const nextTabs = prev.filter((tt) => tt.id !== t.id);
+        if (activeTabIdRef.current === t.id) {
+          queueMicrotask(() => {
+            setActiveTabId(nextTabs.length ? nextTabs[nextTabs.length - 1].id : null);
+          });
+        }
+        return nextTabs;
+      }
+      return prev.map((tt) =>
+        tt.id === t.id
+          ? { ...tt, panes: [remaining[0]!] as [Pane], focusedPaneIdx: 0 }
+          : tt,
+      );
+    });
+  }, []);
+
+  // closeTab drops all panes of a tab. Used by the × button + Delete
+  // shortcut on the tab strip.
+  const closeTab = useCallback((tabId: string) => {
+    const target = tabsRef.current.find((t) => t.id === tabId);
+    if (!target) return;
+    for (const p of target.panes) disposeTerm(p.claudeUuid);
+    setTabs((prev) => {
+      const nextTabs = prev.filter((t) => t.id !== tabId);
+      if (activeTabIdRef.current === tabId) {
+        queueMicrotask(() => {
+          setActiveTabId(nextTabs.length ? nextTabs[nextTabs.length - 1].id : null);
+        });
+      }
+      return nextTabs;
+    });
+  }, []);
+
+  // closePaneByC3 is used by Sidebar when a session row is removed —
+  // close any open pane attached to that c3Id.
+  const closePaneByC3 = useCallback((c3Id: string) => {
+    closePane(c3Id);
+  }, [closePane]);
+
+  const reorderTabs = useCallback((nextTabIds: string[]) => {
+    setTabs((prev) => {
+      const byId = new Map(prev.map((t) => [t.id, t]));
       const reordered: Tab[] = [];
-      for (const u of nextUuids) {
-        const t = byUuid.get(u);
+      for (const id of nextTabIds) {
+        const t = byId.get(id);
         if (t) {
           reordered.push(t);
-          byUuid.delete(u);
+          byId.delete(id);
         }
       }
-      // Append any tabs that weren't in nextUuids (defensive — keeps
-      // them from vanishing if caller passed an incomplete list).
-      for (const t of byUuid.values()) reordered.push(t);
+      for (const t of byId.values()) reordered.push(t);
       return reordered;
     });
   }, []);
 
-  // ---- URL-routed tab hydration -------------------------------------------
-  // On first sessions-list load, open tabs for any c3Ids present in the
-  // URL hash (or the legacy localStorage fallback when the hash is empty).
-  // Unknown c3Ids are silently dropped. Runs at most once per mount.
+  const setRatio = useCallback((tabId: string, ratio: number) => {
+    setTabs((prev) =>
+      prev.map((t) => (t.id === tabId ? { ...t, ratio } : t)),
+    );
+  }, []);
+
+  // ---- URL + layout sidecar hydration -------------------------------------
   const hydratedRef = useRef(false);
   useEffect(() => {
     if (hydratedRef.current) return;
-    if (sessions === null) return; // wait for first fetch to settle
+    if (sessions === null) return;
     hydratedRef.current = true;
 
-    let ids = initialUrlStateRef.current.ids;
-    let active = initialUrlStateRef.current.active;
-    if (ids.length === 0) {
-      // Legacy fallback: previous versions stored tab order under
-      // claudeUuid in sessionStorage. Honor it ONCE, then the URL sync
-      // effect below writes the hash and future reloads use the URL.
-      const legacy = readTabOrder();
-      if (legacy.length > 0) {
-        // Map legacy uuid list → c3Ids via the sessions list.
-        const byUuid = new Map(sessions.map((s) => [s.claudeUuid, s.id]));
-        ids = legacy.map((u) => byUuid.get(u)).filter((x): x is string => !!x);
-      }
-    }
-    if (ids.length === 0) return;
-
-    const byC3 = new Map(sessions.map((s) => [s.id, s]));
-    const toOpen: Tab[] = [];
-    for (const id of ids) {
-      const entry = byC3.get(id);
-      if (!entry) continue; // silently skip unknown
-      const key = entry.claudeUuid || entry.id;
-      const isShell = entry.kind === 'shell';
-      toOpen.push({
-        claudeUuid: key,
-        c3Id: entry.id,
-        name: entry.name || entry.id,
-        cwd: entry.cwd || '',
-        status: isShell || entry.claudeUuid ? 'connecting' : 'pending',
-        kind: isShell ? 'shell' : 'claude',
+    void (async () => {
+      const layout = await loadLayout();
+      const urlIds = initialUrlStateRef.current.ids;
+      const urlActive = initialUrlStateRef.current.active;
+      const byC3 = new Map(sessions.map((s) => [s.id, s]));
+      const { tabs: rehydrated, activeTabId: rehydratedActive } = rehydrateTabs({
+        layout,
+        urlIds,
+        urlActive,
+        byC3,
       });
-    }
-    if (toOpen.length === 0) return;
-    setTabs(toOpen);
-    const activeEntry = active ? byC3.get(active) : null;
-    const activeKey = activeEntry
-      ? activeEntry.claudeUuid || activeEntry.id
-      : toOpen[0].claudeUuid;
-    setActiveUuid(activeKey);
+      if (rehydrated.length === 0) return;
+      setTabs(rehydrated);
+      setActiveTabId(rehydratedActive);
+    })();
   }, [sessions]);
 
-  // Mirror tabs/active into the URL hash on every change. replaceState
-  // means the back button doesn't step through tab edits; it also doesn't
-  // fire popstate, so this can't loop with the parser. Wait until after
-  // hydration so we don't blow away the incoming hash before we've read
-  // it (the parser runs synchronously, but sessions=null delays
-  // hydration; writing the URL early would still serialize empty tabs).
+  // Mirror tabs/active into URL (flat: primary-pane c3Ids only).
   useEffect(() => {
     if (!hydratedRef.current) return;
-    const activeTab = tabs.find((t) => t.claudeUuid === activeUuid);
+    const activeTab = tabs.find((t) => t.id === activeTabId);
     writeTabUrl({
-      ids: tabs.map((t) => t.c3Id),
-      active: activeTab ? activeTab.c3Id : null,
+      ids: tabs.map((t) => primaryPane(t).c3Id),
+      active: activeTab ? primaryPane(activeTab).c3Id : null,
     });
-    // Keep the legacy localStorage in sync for one more cycle so a
-    // downgrade to an older bundle still finds something.
-    writeTabOrder(tabs.map((t) => t.claudeUuid));
-  }, [tabs, activeUuid]);
+  }, [tabs, activeTabId]);
 
+  // Persist to sidecar (debounced).
+  useLayoutSync(tabs, activeTabId, hydratedRef.current);
+
+  // ---- pane status patchers ------------------------------------------------
   const killTab = useCallback(
-    (uuid: string) => {
-      const entry = getTerm(uuid);
+    (tabId: string) => {
+      const t = tabs.find((tt) => tt.id === tabId);
+      if (!t) return;
+      const target = focusedPane(t);
+      const entry = getTerm(target.claudeUuid);
       const ws = entry?.ws;
       if (!ws || ws.readyState !== WebSocket.OPEN) {
         showToast(
@@ -551,80 +597,62 @@ function AppInner() {
         return;
       }
       ws.send(JSON.stringify({ type: 'kill' }));
-      setTabs((prev) =>
-        prev.map((t) => (t.claudeUuid === uuid ? { ...t, killing: true } : t)),
-      );
+      setTabs((prev) => patchPaneByC3(prev, target.c3Id, { killing: true }));
       window.setTimeout(() => {
         setTabs((prev) =>
-          prev.map((t) =>
-            t.claudeUuid === uuid && t.killing && t.status !== 'exited'
-              ? { ...t, killing: false }
-              : t,
+          patchPanesByUuid(prev, target.claudeUuid, (p) =>
+            p.killing && p.status !== 'exited' ? { ...p, killing: false } : p,
           ),
         );
       }, 3000);
     },
-    [showToast],
+    [showToast, tabs],
   );
-
-  const updateTabStatus = useCallback((uuid: string, patch: Partial<Tab>) => {
-    setTabs((prev) =>
-      prev.map((t) => (t.claudeUuid === uuid ? { ...t, ...patch } : t)),
-    );
-  }, []);
 
   const onKicked = useCallback(
     (uuid: string) => {
-      updateTabStatus(uuid, { status: 'kicked' });
+      setTabs((prev) =>
+        patchPanesByUuid(prev, uuid, (p) => ({ ...p, status: 'kicked' })),
+      );
       showToast('Session attached elsewhere — this tab was disconnected.', {
         variant: 'warning',
       });
     },
-    [showToast, updateTabStatus],
+    [showToast],
   );
 
   const onExit = useCallback(
     (uuid: string, code: number) => {
-      // Reset `killing` here too: when the user clicked Kill we set the
-      // flag so the button shows "killing…", but the 3 s safety timer
-      // only unsticks it if status hasn't moved to 'exited'. If the PTY
-      // dies fast (which is the *expected* path after a Kill), the timer
-      // bails out and the button would stay disabled until the tab is
-      // manually closed.
-      updateTabStatus(uuid, { status: 'exited', exitCode: code, killing: false });
+      setTabs((prev) =>
+        patchPanesByUuid(prev, uuid, (p) => ({
+          ...p,
+          status: 'exited',
+          exitCode: code,
+          killing: false,
+        })),
+      );
       showToast(`claude exited (code ${code}).`, { variant: 'info' });
     },
-    [showToast, updateTabStatus],
+    [showToast],
   );
 
   const onStatus = useCallback((uuid: string, status: TabStatus) => {
     setTabs((prev) =>
-      prev.map((t) => {
-        if (t.claudeUuid !== uuid) return t;
-        if (t.status === 'kicked' || t.status === 'exited') return t;
-        // Don't downgrade pending → connected via ws.onopen; we only flip
-        // out of 'pending' when the server explicitly sends {type:'ready'}.
-        if (t.status === 'pending' && status === 'connected') return t;
-        // Don't let ws.onclose's generic 'disconnected' overwrite a
-        // specific 'error' that the server's last control frame set.
-        // Reconnect (which fires 'connecting' below) clears the error.
-        if (t.status === 'error' && status === 'disconnected') return t;
+      patchPanesByUuid(prev, uuid, (p) => {
+        if (p.status === 'kicked' || p.status === 'exited') return p;
+        if (p.status === 'pending' && status === 'connected') return p;
+        if (p.status === 'error' && status === 'disconnected') return p;
         if (status === 'connecting' || status === 'connected') {
-          return { ...t, status, errorMessage: undefined };
+          return { ...p, status, errorMessage: undefined };
         }
-        return { ...t, status };
+        return { ...p, status };
       }),
     );
   }, []);
 
-  // Server sent {type:"error",message} during attach (e.g. claude not
-  // in PATH). Persist the message so the transport-problem banner can
-  // show the real reason instead of a generic "Disconnected".
   const onError = useCallback((uuid: string, message: string) => {
     setTabs((prev) =>
-      prev.map((t) =>
-        t.claudeUuid === uuid ? { ...t, status: 'error', errorMessage: message } : t,
-      ),
+      patchPanesByUuid(prev, uuid, (p) => ({ ...p, status: 'error', errorMessage: message })),
     );
     showToast(`Attach failed: ${message}`, { variant: 'error' });
   }, [showToast]);
@@ -632,10 +660,9 @@ function AppInner() {
   const onReady = useCallback(
     (uuid: string) => {
       setTabs((prev) =>
-        prev.map((t) => (t.claudeUuid === uuid ? { ...t, status: 'connected' } : t)),
+        patchPanesByUuid(prev, uuid, (p) => ({ ...p, status: 'connected' })),
       );
       showToast('Session ready.', { variant: 'success' });
-      // Pull the new uuid into the list / tab keying.
       void refresh();
     },
     [refresh, showToast],
@@ -643,24 +670,112 @@ function AppInner() {
 
   const onPending = useCallback((uuid: string) => {
     setTabs((prev) =>
-      prev.map((t) => (t.claudeUuid === uuid ? { ...t, status: 'pending' } : t)),
+      patchPanesByUuid(prev, uuid, (p) => ({ ...p, status: 'pending' })),
     );
   }, []);
 
-  // Palette helpers. closeAllTabs disposes terms + clears state in one
-  // pass; archiveActive looks up the c3 entry from the active tab and
-  // mutates via the API directly (cheaper than threading the Sidebar's
-  // doArchive callback through props). copyCwd reuses the same fallback
-  // pattern as StatusBar's copy hint.
+  // ---- split active tab ---------------------------------------------------
+  // Single-step: caller picks the kind (Claude/Shell/Bind) via the tab-strip
+  // split menu (or Mod+\ which defaults to claude). No "awaiting" state —
+  // each invocation either succeeds or surfaces a toast immediately.
+  const splitActiveTab = useCallback(
+    async (kind: 'claude' | 'shell' | 'bind') => {
+      if (!activeTabId) return;
+      const tab = tabs.find((tt) => tt.id === activeTabId);
+      if (!tab) return;
+      if (tab.panes.length === 2) return; // already split
+      if (kind === 'bind') {
+        // Bind needs an existing-uuid picker; defer to the sidebar's Bind
+        // form rather than duplicating it inside the split affordance.
+        setSidebarOpen(true);
+        showToast('Use the ↪ icon in the sidebar to bind a session, then split again.', {
+          variant: 'info',
+        });
+        return;
+      }
+      const seedCwd = primaryPane(tab).cwd || '';
+      const name = kind === 'shell' ? 'shell' : 'claude';
+      try {
+        const entry = await createSession({
+          cwd: seedCwd,
+          name,
+          kind: kind === 'shell' ? 'shell' : undefined,
+        });
+        setTabs((prev) =>
+          prev.map((t) => {
+            if (t.id !== activeTabId) return t;
+            if (t.panes.length === 2) return t; // race
+            const pane = paneFromEntry(entry);
+            return {
+              ...t,
+              panes: [t.panes[0], pane] as [Pane, Pane],
+              focusedPaneIdx: 1,
+            };
+          }),
+        );
+        void refresh();
+      } catch (e) {
+        showToast(
+          `Split failed — ${e instanceof Error ? e.message : 'create session error'}`,
+          { variant: 'error' },
+        );
+      }
+    },
+    [activeTabId, refresh, showToast, tabs],
+  );
+
+  // ---- hotkeys: split + pane cycle + close pane ---------------------------
+  useShortcut(
+    {
+      id: 'pane.split',
+      // Mod+d is bookmark-this-page in browsers; preventDefault works on
+      // Chrome but fires *after* the dialog on Safari. Mod+\ is tmux's
+      // prefix-\ for horizontal split and is unbound in all major
+      // browsers — safer choice.
+      keys: 'Mod+\\',
+      scope: 'global',
+      label: 'Split active tab',
+      when: () => notInInput() && !!activeTabId,
+      // Default to Claude (most common); user picks Shell/Bind via the
+      // tab-strip split menu's expanded icons.
+      handler: () => void splitActiveTab('claude'),
+      preventDefault: true,
+    },
+    [activeTabId, splitActiveTab],
+  );
+  // Focus-cycle hotkeys (Mod+Shift+[ / Mod+Shift+]) intentionally NOT
+  // registered: split UX is primarily click-driven; click any pane to
+  // focus it. Adding two more keys for a 2-pane toggle would clutter
+  // the Cheatsheet for marginal benefit. Reintroduce if/when N≥3.
+  useShortcut(
+    {
+      id: 'pane.close.focused',
+      // Use Mod+Shift+w to avoid the Mod+w browser tab-close binding.
+      keys: 'Mod+Shift+w',
+      scope: 'global',
+      label: 'Close focused pane',
+      when: () => notInInput() && !!activeTabId,
+      handler: () => {
+        const t = tabs.find((tt) => tt.id === activeTabId);
+        if (!t) return;
+        closePane(focusedPane(t).c3Id);
+      },
+      preventDefault: true,
+    },
+    [activeTabId, tabs, closePane],
+  );
+
+  // ---- palette helpers -----------------------------------------------------
   const closeAllTabs = useCallback(() => {
-    for (const t of tabs) disposeTerm(t.claudeUuid);
+    for (const t of tabs) for (const p of t.panes) disposeTerm(p.claudeUuid);
     setTabs([]);
-    setActiveUuid(null);
+    setActiveTabId(null);
   }, [tabs]);
   const archiveActive = useCallback(async () => {
-    const t = tabs.find((x) => x.claudeUuid === activeUuid);
+    const t = tabs.find((x) => x.id === activeTabId);
     if (!t) return;
-    const entry = sessions?.find((s) => s.id === t.c3Id) ?? null;
+    const primary = primaryPane(t);
+    const entry = sessions?.find((s) => s.id === primary.c3Id) ?? null;
     if (!entry) return;
     try {
       const r = await archiveSession(entry.id);
@@ -672,7 +787,7 @@ function AppInner() {
     } catch {
       showToast('Archive failed', { variant: 'error' });
     }
-  }, [activeUuid, refresh, sessions, showToast, tabs]);
+  }, [activeTabId, refresh, sessions, showToast, tabs]);
   const copyCwd = useCallback(
     (cwd: string) => {
       if (!cwd) return;
@@ -691,13 +806,7 @@ function AppInner() {
   const paletteActions: PaletteActions = {
     refresh: () => void refresh(),
     toggleSidebar,
-    openNewSession: () => {
-      // Inline first-prompt flow (2026-05-19): always route through
-      // the main-pane NewSessionPane. The sidebar's inline form is
-      // kept for the Bind dialog only; new-session creation lives
-      // here so the user can pre-fill a first prompt + auto-submit.
-      startCreatingSession();
-    },
+    openNewSession: () => startCreatingSession(),
     setView,
     closeTab,
     killTab,
@@ -714,6 +823,10 @@ function AppInner() {
     (narrow && sidebarOpen ? ' drawer-open' : '') +
     (!sidebarOpen && !narrow ? ' sidebar-hidden' : '') +
     (zenFaded ? ' zen-faded' : '');
+
+  const activeTab = tabs.find((t) => t.id === activeTabId) ?? null;
+  const activeC3Id = activeTab ? focusedPane(activeTab).c3Id : null;
+  const activePane: Pane | null = activeTab ? focusedPane(activeTab) : null;
 
   return (
     <div className={appClass}>
@@ -744,7 +857,7 @@ function AppInner() {
           }}
           resizable={!narrow}
           sessions={sessions}
-          activeUuid={activeUuid}
+          activeC3Id={activeC3Id}
           openTabs={tabs}
           view={view}
           onViewChange={setView}
@@ -752,16 +865,13 @@ function AppInner() {
           onRefresh={refresh}
           onSessionSelected={narrow ? closeDrawer : undefined}
           onAfterMutate={refresh}
-          onCloseTabFor={closeTab}
+          onCloseTabFor={closePaneByC3}
           narrow={narrow}
           showToast={showToast}
           openNewSessionTick={openNewSessionTick}
           onRequestCreate={() => {
-            // Mirror Welcome's path: surface the drawer on narrow
-            // viewports so the user sees the result, then swap to
-            // the main-pane NewSessionPane.
             if (narrow) {
-              setSidebarOpen(false); // close drawer so main pane is visible
+              setSidebarOpen(false);
               userTouched.current = true;
               writeSidebarPref(false);
             }
@@ -773,20 +883,15 @@ function AppInner() {
       <main className="workspace">
         <TabBar
           tabs={tabs}
-          activeUuid={activeUuid}
+          activeTabId={activeTabId}
           onSelect={activateTab}
-          onClose={closeTab}
+          onCloseTab={closeTab}
           onKill={killTab}
           onReorder={reorderTabs}
+          onSplitActive={(kind) => void splitActiveTab(kind)}
         />
         <div className="pane-host">
           {creatingSession ? (
-            // NewSessionPane replaces both Welcome and the terminal
-            // panes while active — never stack a form on top of a
-            // running terminal. We still mount existing TerminalPane
-            // instances hidden underneath so their WS stays attached
-            // (closing the form on success → activateTab swaps them
-            // back into view without dropping any output).
             <>
               <NewSessionPane
                 onCreated={(entry) => {
@@ -798,8 +903,8 @@ function AppInner() {
                 flashKey={paneFlashKey}
               />
               {tabs.map((tab) => (
-                <TerminalPane
-                  key={tab.c3Id}
+                <SplitContainer
+                  key={tab.id}
                   tab={tab}
                   visible={false}
                   onStatus={onStatus}
@@ -808,8 +913,10 @@ function AppInner() {
                   onPending={onPending}
                   onReady={onReady}
                   onError={onError}
-                  onClose={closeTab}
+                  onClosePane={closePane}
                   onMention={onMention}
+                  onFocusPane={focusPane}
+                  onRatioChange={setRatio}
                   colCap={colCap}
                   rowCap={rowCap}
                 />
@@ -822,18 +929,20 @@ function AppInner() {
             />
           ) : (
             tabs.map((tab) => (
-              <TerminalPane
-                key={tab.c3Id}
+              <SplitContainer
+                key={tab.id}
                 tab={tab}
-                visible={tab.claudeUuid === activeUuid}
+                visible={tab.id === activeTabId}
                 onStatus={onStatus}
                 onKicked={onKicked}
                 onExit={onExit}
                 onPending={onPending}
                 onReady={onReady}
                 onError={onError}
-                onClose={closeTab}
+                onClosePane={closePane}
                 onMention={onMention}
+                onFocusPane={focusPane}
+                onRatioChange={setRatio}
                 colCap={colCap}
                 rowCap={rowCap}
               />
@@ -841,28 +950,21 @@ function AppInner() {
           )}
         </div>
         {(() => {
-          const active = tabs.find((t) => t.claudeUuid === activeUuid) ?? null;
-          // Hash status string into a number — StatusBar only uses pulse
-          // as a "did this change?" signal to reset its idle timer.
           let pulse = 0;
-          if (active) {
-            for (let i = 0; i < active.status.length; i++) {
-              pulse = (pulse * 31 + active.status.charCodeAt(i)) | 0;
+          if (activePane) {
+            for (let i = 0; i < activePane.status.length; i++) {
+              pulse = (pulse * 31 + activePane.status.charCodeAt(i)) | 0;
             }
           }
           return (
             <StatusBar
-              activeTab={active}
+              activeTab={activePane}
               pulse={pulse}
               themeName={themeName}
               onThemeChange={onThemeChange}
               onOpenDims={() => setDimsDialogOpen(true)}
               onCopyCwd={(cwd) => {
                 if (!cwd) return;
-                // Clipboard requires a secure context. Loopback HTTP
-                // counts as secure on Chromium but not always on Safari
-                // / older browsers — fall back to an error toast so we
-                // don't claim "Copied" when nothing happened.
                 if (!navigator.clipboard) {
                   showToast('Copy failed — clipboard unavailable', {
                     variant: 'error',
@@ -887,7 +989,7 @@ function AppInner() {
         onClose={() => setPaletteOpen(false)}
         sessions={sessions}
         tabs={tabs}
-        activeUuid={activeUuid}
+        activeTabId={activeTabId}
         view={view}
         themeName={themeName}
         onOpenSession={openTab}
@@ -901,14 +1003,7 @@ function AppInner() {
         onThemeChange={onThemeChange}
       />
       {(() => {
-        // Viewport hint for the "Max (NN)" radio labels. Read the active
-        // term's current cols/rows — these reflect the clamped grid when
-        // a cap is active, so we have to undo the clamp to show the true
-        // viewport. Cheap approximation: the active xterm's `cols` is
-        // either viewport (no cap) or capped value (cap < viewport). When
-        // a cap is in effect we just show the cap as the parenthetical —
-        // it's enough of a hint to the user.
-        const t = activeUuid ? getTerm(activeUuid) : null;
+        const t = activePane ? getTerm(activePane.claudeUuid) : null;
         const vCols = t?.term.cols ?? 0;
         const vRows = t?.term.rows ?? 0;
         return (

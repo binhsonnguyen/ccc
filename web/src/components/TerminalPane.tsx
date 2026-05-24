@@ -6,11 +6,15 @@ import { stripAnsi } from '../lib/ansi';
 import { countMatches } from '../lib/mention';
 import { paneId, tabId } from './TabBar';
 import { useToast } from './Toast';
-import type { ControlMsg, Tab, TabStatus } from '../types';
+import type { ControlMsg, Pane, TabStatus } from '../types';
 
 interface Props {
-  tab: Tab;
+  pane: Pane;
   visible: boolean;
+  // focused: true when this pane is the active pane within its tab.
+  // Drives the 2px accent border that distinguishes split halves.
+  focused: boolean;
+  onFocus: () => void;
   onStatus: (uuid: string, status: TabStatus) => void;
   onKicked: (uuid: string) => void;
   onExit: (uuid: string, code: number) => void;
@@ -20,11 +24,11 @@ interface Props {
   // ws.onclose will follow but should not overwrite the more-specific
   // error status (see App.onStatus guard).
   onError: (uuid: string, message: string) => void;
-  onClose: (uuid: string) => void;
-  // C-5: bump this tab's mention counter by `delta`. App is responsible
-  // for ignoring bumps on the active tab (cheaper than threading the
-  // active uuid through props — we also early-return below to skip the
-  // decode entirely when this pane is visible).
+  // Close this specific pane. App promotes secondary → primary if the
+  // primary was closed, drops the tab when the last pane closes.
+  onClose: (c3Id: string) => void;
+  // Bump this pane's mention counter by `delta`. App is responsible
+  // for ignoring bumps on the active pane.
   onMention: (uuid: string, delta: number) => void;
   // Global PTY dim caps. null = follow viewport. When set, we clamp the
   // xterm grid via term.resize() after FitAddon computes viewport dims,
@@ -33,6 +37,10 @@ interface Props {
   // right edge; the grid simply doesn't render past `cap` columns.
   colCap: number | null;
   rowCap: number | null;
+  // When true, render a small × in the pane's top-right corner that
+  // closes just this pane. Hidden on single-pane tabs (where the
+  // tab-strip × already provides "close" semantics).
+  showPaneCloseButton?: boolean;
 }
 
 // Threshold beyond which we surface the "session idle" banner. 30 minutes
@@ -87,8 +95,10 @@ function humanizeIdle(ms: number): string {
 // The xterm instance lives in the out-of-tree Map (see lib/terminals.ts);
 // effects here only attach DOM, wire WS, and bind input handlers.
 export default function TerminalPane({
-  tab,
+  pane,
   visible,
+  focused,
+  onFocus,
   onStatus,
   onKicked,
   onExit,
@@ -99,6 +109,7 @@ export default function TerminalPane({
   onMention,
   colCap,
   rowCap,
+  showPaneCloseButton,
 }: Props) {
   const { showToast } = useToast();
 
@@ -280,7 +291,7 @@ export default function TerminalPane({
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
-    const entry = getOrCreateTerm(tab.claudeUuid);
+    const entry = getOrCreateTerm(pane.claudeUuid);
 
     if (entry.container !== host) {
       const el = entry.term.element;
@@ -307,14 +318,14 @@ export default function TerminalPane({
     const ro = new ResizeObserver(() => {
       if (entry.resizeTimer) window.clearTimeout(entry.resizeTimer);
       entry.resizeTimer = window.setTimeout(() => {
-        fitAndSync(tab.claudeUuid);
+        fitAndSync(pane.claudeUuid);
       }, 80);
     });
     ro.observe(host);
 
     if (!wsBoundRef.current) {
       wsBoundRef.current = true;
-      openWS(tab.claudeUuid, tab.c3Id);
+      openWS(pane.claudeUuid, pane.c3Id);
     }
 
     return () => {
@@ -331,7 +342,7 @@ export default function TerminalPane({
       entry.ws = null;
       wsBoundRef.current = false;
     };
-  }, [tab.claudeUuid, tab.c3Id, openWS]);
+  }, [pane.claudeUuid, pane.c3Id, openWS]);
 
   // ---- clipboard image paste + drag-drop -----------------------------
   // Intercept paste/drop on the terminal host BEFORE xterm sees them.
@@ -345,7 +356,7 @@ export default function TerminalPane({
     if (!host) return;
 
     const sendStdin = (s: string) => {
-      const entry = getOrCreateTerm(tab.claudeUuid);
+      const entry = getOrCreateTerm(pane.claudeUuid);
       const ws = entry.ws;
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(new TextEncoder().encode(s));
@@ -379,7 +390,7 @@ export default function TerminalPane({
 
     const injectPaths = async (files: File[]) => {
       try {
-        const paths = await uploadImages(tab.c3Id, files);
+        const paths = await uploadImages(pane.c3Id, files);
         for (const p of paths) {
           sendStdin(`@${p} `);
         }
@@ -454,31 +465,31 @@ export default function TerminalPane({
       host.removeEventListener('dragleave', onDragLeave);
       host.removeEventListener('drop', onDrop);
     };
-  }, [tab.c3Id, tab.claudeUuid, showToast]);
+  }, [pane.c3Id, pane.claudeUuid, showToast]);
 
   useEffect(() => {
     if (!visible) return;
-    fitAndSync(tab.claudeUuid);
-  }, [visible, tab.claudeUuid, fitAndSync]);
+    fitAndSync(pane.claudeUuid);
+  }, [visible, pane.claudeUuid, fitAndSync]);
 
   // Caps change → re-fit + re-resize + ship new dims. fit() is
   // idempotent and lastCols/Rows gate the ws send, so nothing is wasted
   // if the grid didn't actually move.
   useEffect(() => {
     if (!visible) return;
-    fitAndSync(tab.claudeUuid);
-  }, [colCap, rowCap, visible, tab.claudeUuid, fitAndSync]);
+    fitAndSync(pane.claudeUuid);
+  }, [colCap, rowCap, visible, pane.claudeUuid, fitAndSync]);
 
   const reconnect = useCallback(
     () => {
       lastReconnectAtRef.current = Date.now();
-      openWS(tab.claudeUuid, tab.c3Id);
+      openWS(pane.claudeUuid, pane.c3Id);
     },
-    [openWS, tab.claudeUuid, tab.c3Id],
+    [openWS, pane.claudeUuid, pane.c3Id],
   );
 
-  const terminalDead = tab.status === 'kicked' || tab.status === 'exited';
-  const transportProblem = tab.status === 'disconnected' || tab.status === 'error';
+  const terminalDead = pane.status === 'kicked' || pane.status === 'exited';
+  const transportProblem = pane.status === 'disconnected' || pane.status === 'error';
 
   // ---- idle-PTY banner -------------------------------------------------
   // Poll /activity (which already returns idleMs server-side, measured
@@ -494,12 +505,12 @@ export default function TerminalPane({
     // Only poll while connected and only for sessions that already have
     // a live PTY (uuid known). Pending/dead/transport-broken tabs have
     // no idle signal to report.
-    if (tab.status !== 'connected') return;
+    if (pane.status !== 'connected') return;
     let cancelled = false;
     const tick = async () => {
       if (document.hidden) return;
       try {
-        const r = await fetchActivity(tab.c3Id);
+        const r = await fetchActivity(pane.c3Id);
         if (cancelled) return;
         if (!r) {
           // No live PTY (server 204) — clear any stale state.
@@ -525,18 +536,18 @@ export default function TerminalPane({
       cancelled = true;
       window.clearInterval(h);
     };
-  }, [tab.status, tab.c3Id]);
+  }, [pane.status, pane.c3Id]);
 
   const idleBannerVisible =
     visible &&
-    tab.status === 'connected' &&
+    pane.status === 'connected' &&
     !terminalDead &&
     !transportProblem &&
     !idleDismissed &&
     idleMs >= IDLE_THRESHOLD_MS;
 
   const sendWake = useCallback(() => {
-    const entry = getOrCreateTerm(tab.claudeUuid);
+    const entry = getOrCreateTerm(pane.claudeUuid);
     const ws = entry.ws;
     if (ws && ws.readyState === WebSocket.OPEN) {
       // 0x0D = CR. Claude's prompt treats this as "submit empty line",
@@ -549,7 +560,7 @@ export default function TerminalPane({
     // CRs visually (the byte is harmless either way).
     setSendDisabled(true);
     window.setTimeout(() => setSendDisabled(false), 1000);
-  }, [tab.claudeUuid]);
+  }, [pane.claudeUuid]);
 
   // Autofocus the primary action when the terminal-dead overlay shows.
   // The inline banner does not trap focus by design.
@@ -564,24 +575,41 @@ export default function TerminalPane({
   // showing the overlay — so two open tabs don't both fire.
   useShortcut(
     {
-      id: `pane.close.${tab.claudeUuid}`,
+      id: `pane.close.${pane.c3Id}`,
       keys: 'Escape',
       scope: 'global',
       label: 'Dismiss terminal-dead overlay',
       when: () => visible && terminalDead,
-      handler: () => onClose(tab.claudeUuid),
+      handler: () => onClose(pane.c3Id),
     },
-    [visible, terminalDead, tab.claudeUuid, onClose],
+    [visible, terminalDead, pane.claudeUuid, onClose],
   );
 
   return (
     <div
-      className={'pane' + (visible ? '' : ' hidden')}
-      id={paneId(tab.claudeUuid)}
+      className={
+        'pane' + (visible ? '' : ' hidden') + (focused ? ' pane-focused' : '')
+      }
+      id={paneId(pane.c3Id)}
       role="tabpanel"
-      aria-labelledby={tabId(tab.claudeUuid)}
+      aria-labelledby={tabId(pane.c3Id)}
+      onMouseDownCapture={onFocus}
     >
-      {tab.status === 'pending' && visible && (
+      {showPaneCloseButton && (
+        <button
+          type="button"
+          className="pane-close"
+          onClick={(e) => {
+            e.stopPropagation();
+            onClose(pane.c3Id);
+          }}
+          aria-label="Close this pane"
+          title="Close pane"
+        >
+          ×
+        </button>
+      )}
+      {pane.status === 'pending' && visible && (
         <div className="inline-banner banner-pending" role="status">
           <span className="banner-icon" aria-hidden="true">
             <span className="spinner" />
@@ -594,14 +622,14 @@ export default function TerminalPane({
       )}
       {transportProblem && visible && (
         <div
-          className={'inline-banner banner-' + (tab.status === 'error' ? 'error' : 'warn')}
+          className={'inline-banner banner-' + (pane.status === 'error' ? 'error' : 'warn')}
           role="status"
         >
           <span className="banner-icon" aria-hidden="true">⚠</span>
           <span className="banner-text">
-            {tab.status === 'error'
-              ? tab.errorMessage
-                ? `Attach failed: ${tab.errorMessage}`
+            {pane.status === 'error'
+              ? pane.errorMessage
+                ? `Attach failed: ${pane.errorMessage}`
                 : 'Connection error — server closed the WebSocket.'
               : 'Disconnected — PTY may still be running.'}
           </span>
@@ -610,7 +638,7 @@ export default function TerminalPane({
           </button>
           <button
             className="btn btn-sm"
-            onClick={() => onClose(tab.claudeUuid)}
+            onClick={() => onClose(pane.c3Id)}
             aria-label="Dismiss and close tab"
           >
             Close
@@ -650,10 +678,10 @@ export default function TerminalPane({
           </div>
         )}
       </div>
-      {tab.status === 'kicked' && visible && (
-        <div className="overlay" role="dialog" aria-modal="true" aria-labelledby={`kicked-${tab.claudeUuid}`}>
+      {pane.status === 'kicked' && visible && (
+        <div className="overlay" role="dialog" aria-modal="true" aria-labelledby={`kicked-${pane.claudeUuid}`}>
           <div className="overlay-card">
-            <h2 id={`kicked-${tab.claudeUuid}`}>Session opened elsewhere</h2>
+            <h2 id={`kicked-${pane.claudeUuid}`}>Session opened elsewhere</h2>
             <p>
               This PTY is now attached to another window. Take over to bring it back
               here, or close this tab.
@@ -662,20 +690,20 @@ export default function TerminalPane({
               <button ref={primaryBtnRef} className="btn primary" onClick={reconnect}>
                 Take over
               </button>
-              <button className="btn" onClick={() => onClose(tab.claudeUuid)}>
+              <button className="btn" onClick={() => onClose(pane.c3Id)}>
                 Close
               </button>
             </div>
           </div>
         </div>
       )}
-      {tab.status === 'exited' && visible && (
-        <div className="overlay" role="dialog" aria-modal="true" aria-labelledby={`exited-${tab.claudeUuid}`}>
+      {pane.status === 'exited' && visible && (
+        <div className="overlay" role="dialog" aria-modal="true" aria-labelledby={`exited-${pane.claudeUuid}`}>
           <div className="overlay-card">
-            {tab.kind === 'shell' ? (
+            {pane.kind === 'shell' ? (
               <>
-                <h2 id={`exited-${tab.claudeUuid}`}>{shellExitTitle(tab.exitCode)}</h2>
-                {shellExitHint(tab.exitCode) && <p>{shellExitHint(tab.exitCode)}</p>}
+                <h2 id={`exited-${pane.claudeUuid}`}>{shellExitTitle(pane.exitCode)}</h2>
+                {shellExitHint(pane.exitCode) && <p>{shellExitHint(pane.exitCode)}</p>}
                 <p>
                   Restart spawns a fresh shell in the same cwd. Scrollback
                   from the previous session is not preserved.
@@ -691,7 +719,7 @@ export default function TerminalPane({
                   </button>
                   <button
                     className="btn"
-                    onClick={() => onClose(tab.claudeUuid)}
+                    onClick={() => onClose(pane.c3Id)}
                   >
                     Close tab
                   </button>
@@ -699,13 +727,13 @@ export default function TerminalPane({
               </>
             ) : (
               <>
-                <h2 id={`exited-${tab.claudeUuid}`}>claude exited</h2>
-                <p>Exit code {tab.exitCode ?? '?'}.</p>
+                <h2 id={`exited-${pane.claudeUuid}`}>claude exited</h2>
+                <p>Exit code {pane.exitCode ?? '?'}.</p>
                 <div className="overlay-actions">
                   <button
                     ref={primaryBtnRef}
                     className="btn"
-                    onClick={() => onClose(tab.claudeUuid)}
+                    onClick={() => onClose(pane.c3Id)}
                   >
                     Close tab
                   </button>
