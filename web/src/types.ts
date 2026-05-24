@@ -13,17 +13,15 @@ export interface C3Entry {
   live?: boolean;
   // kind discriminates entry type. Absent ⇒ 'claude' (legacy). 'shell'
   // means a plain $SHELL -i tab — no claudeUuid, no transcript, no
-  // discovery handshake. Mirrors core.C3Entry.Kind (json:"kind,omitempty").
+  // discovery handshake.
   kind?: 'claude' | 'shell';
 }
 
 // Claude session record returned by GET /api/claude-sessions in the
-// `unbound` array. Mirrors `claudefs.Session` fields the bind UI needs.
+// `unbound` array.
 export interface ClaudeSession {
   uuid: string;
   cwd: string;
-  // summary: Claude-generated session summary (first user prompt). Wire
-  // field matches core.Session JSON tag.
   summary?: string;
   modified?: string;
 }
@@ -37,15 +35,11 @@ export type ControlMsg =
   | { type: 'kicked' }
   | { type: 'exit'; code: number }
   | { type: 'error'; message?: string }
-  // D-7: server sends `pending` right after attach when entry has no
-  // claudeUuid yet — claude is being spawned in no-resume mode while the
-  // discovery loop watches for JSONL. Sidebar list polling will pick the
-  // uuid up after `ready`.
   | { type: 'pending' }
   | { type: 'ready' };
 
-// UI-side tab status. Drives the badge in the tab strip and the overlay
-// shown over the terminal pane.
+// UI-side pane status. Drives the badge in the tab strip (derived from
+// primary pane) and the overlay shown over the terminal pane.
 export type TabStatus =
   | 'connecting'
   | 'connected'
@@ -55,36 +49,76 @@ export type TabStatus =
   | 'exited'
   | 'error';
 
-export interface Tab {
-  // claudeUuid: dedup key (one tab per Claude session even if multiple
-  // c3 entries point at it). For pending entries the c3 id is reused
-  // here as a placeholder until the server upgrades the entry — the
-  // sidebar refresh after `ready` swaps the tab over.
-  claudeUuid: string;
-  // c3Id: addressing key for /api/sessions/:id/pty WS route. The server
-  // resolves entry by c3 id and looks up its claudeUuid internally.
+// One attached PTY surface. Multiple panes can coexist inside a single
+// Tab. The c3Id is the unique addressing key; claudeUuid is the term
+// store / discovery key (set equal to c3Id for shell tabs and pending
+// claude sessions until discovery rekeys).
+export interface Pane {
   c3Id: string;
+  claudeUuid: string;
   name: string;
   cwd: string;
   status: TabStatus;
   exitCode?: number;
-  // killing: set true after the user clicks Kill and we sent {type:"kill"}.
-  // Cleared when the server responds with `exit` (onExit handler) or a
-  // 3s safety timeout in App.killTab. While true, both Kill and × close
-  // buttons are disabled to prevent spam-click while the server is
-  // SIGKILL'ing the child.
   killing?: boolean;
-  // C-5: count of regex matches in PTY output that arrived while this
-  // tab was inactive. Cleared on activation. Undefined ≡ 0; rendered as
-  // a small pill on inactive tabs in TabBar.
   mentions?: number;
-  // Error message from the server's last {type:"error"} control frame.
-  // Surfaced in the transport-problem banner when status === 'error' so
-  // the user sees the real reason (e.g. "claude not found in PATH")
-  // instead of a generic "Disconnected".
   errorMessage?: string;
-  // kind discriminates the tab's PTY kind. Absent ⇒ 'claude'. Drives the
-  // exit-overlay copy ("claude exited" vs "Shell exited"), the sidebar
-  // badge, and (eventually) which icon/colour the tab strip shows.
   kind?: 'claude' | 'shell';
+}
+
+// A workspace tab. Holds 1 or 2 panes (binary split, v0.2.23). The
+// `orientation` field exists for v2 forward-compat — v1 is always 'h'.
+export interface Tab {
+  // Stable client-generated id; survives renames, splits, focus changes,
+  // and primary↔secondary swaps. Used as the React key and as the
+  // sidecar layout.json key.
+  id: string;
+  panes: [Pane] | [Pane, Pane];
+  orientation: 'h';
+  ratio: number;          // 0.1..0.9, default 0.5
+  focusedPaneIdx: 0 | 1;
+}
+
+// --- helpers ---------------------------------------------------------------
+
+export function primaryPane(t: Tab): Pane {
+  return t.panes[0];
+}
+
+export function focusedPane(t: Tab): Pane {
+  const idx = t.focusedPaneIdx;
+  if (idx === 1 && t.panes.length === 2) return t.panes[1]!;
+  return t.panes[0];
+}
+
+export function paneCount(t: Tab): 1 | 2 {
+  return t.panes.length as 1 | 2;
+}
+
+export function findPane(
+  tabs: Tab[],
+  c3Id: string,
+): { tab: Tab; idx: 0 | 1 } | null {
+  for (const t of tabs) {
+    if (t.panes[0].c3Id === c3Id) return { tab: t, idx: 0 };
+    if (t.panes.length === 2 && t.panes[1]!.c3Id === c3Id) return { tab: t, idx: 1 };
+  }
+  return null;
+}
+
+// True iff the c3Id is already attached in any open tab's panes. The
+// App.openTab guard uses this to block a duplicate attach (single-PTY
+// invariant).
+export function paneOpen(tabs: Tab[], c3Id: string): boolean {
+  return findPane(tabs, c3Id) !== null;
+}
+
+// Generate a stable client-side tab id. crypto.randomUUID() is in every
+// supported browser (Chromium 92+, Safari 15.4+, Firefox 95+).
+export function newTabId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  // Fallback for ancient runtimes / tests: random hex.
+  return 'tab-' + Math.random().toString(16).slice(2) + Date.now().toString(16);
 }

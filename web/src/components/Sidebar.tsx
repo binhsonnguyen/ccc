@@ -23,7 +23,9 @@ interface Props {
   // null = initial load in flight (Sidebar renders skeleton). [] = loaded
   // but empty. Array = loaded with entries.
   sessions: C3Entry[] | null;
-  activeUuid: string | null;
+  // c3Id of the focused pane in the active tab. Drives row "active"
+  // highlight + ARIA aria-current.
+  activeC3Id: string | null;
   openTabs: Tab[];
   view: SidebarView;
   onViewChange: (v: SidebarView) => void;
@@ -34,7 +36,8 @@ interface Props {
   // close a tab (remove path closes the open tab if it matched the
   // removed entry).
   onAfterMutate: () => void;
-  onCloseTabFor: (uuid: string) => void;
+  // Close any open pane bound to the given c3Id (used by row removal).
+  onCloseTabFor: (c3Id: string) => void;
   // Drawer mode flag for the new-session form fallback.
   narrow: boolean;
   showToast: (
@@ -157,7 +160,7 @@ function buckets_eq(
 
 export default function Sidebar({
   sessions,
-  activeUuid,
+  activeC3Id,
   openTabs,
   view,
   onViewChange,
@@ -229,7 +232,15 @@ export default function Sidebar({
       onWidthChange(SIDEBAR_W_DEFAULT);
     }
   };
-  const openSet = new Set(openTabs.map((t) => t.claudeUuid));
+  // Open set is keyed by c3Id (each pane's session). For the "already
+  // open in tab N" tooltip we also track which tab index a c3Id is in.
+  const openByC3 = new Map<string, number>();
+  openTabs.forEach((t, ti) => {
+    for (const p of t.panes) {
+      if (!openByC3.has(p.c3Id)) openByC3.set(p.c3Id, ti);
+    }
+  });
+  const openSet = new Set(openByC3.keys());
   const [menu, setMenu] = useState<MenuState | null>(null);
   // Filter (B-2). Local + transient: not persisted across reloads — the
   // sidebar's job is to surface sessions, not remember a search.
@@ -474,9 +485,8 @@ export default function Sidebar({
       try {
         await removeSession(s.id, wasLive);
         showToast(`Removed ${s.name || s.id}`, { variant: 'info' });
-        // Shell entries use c3 id as the tab key (no claudeUuid).
-        const closeKey = s.kind === 'shell' ? s.id : s.claudeUuid;
-        if (closeKey) onCloseTabFor(closeKey);
+        // Close any open pane attached to this session's c3Id.
+        onCloseTabFor(s.id);
         onAfterMutate();
       } catch (err) {
         if (err instanceof ApiError && err.status === 409) {
@@ -485,9 +495,8 @@ export default function Sidebar({
           try {
             await removeSession(s.id, true);
             showToast(`Removed ${s.name || s.id} (force)`, { variant: 'warning' });
-            // Shell entries use c3 id as the tab key (no claudeUuid).
-        const closeKey = s.kind === 'shell' ? s.id : s.claudeUuid;
-        if (closeKey) onCloseTabFor(closeKey);
+            // Close any open pane attached to this session's c3Id.
+        onCloseTabFor(s.id);
             onAfterMutate();
             return;
           } catch (err2) {
@@ -533,8 +542,7 @@ export default function Sidebar({
 
   const buildMenu = useCallback(
     (s: C3Entry): MenuItem[] => {
-      const tabKey = s.kind === 'shell' ? s.id : s.claudeUuid;
-      const isOpen = !!tabKey && openSet.has(tabKey);
+      const isOpen = openSet.has(s.id);
       const pending = !s.claudeUuid && s.kind !== 'shell';
       const archived = view === 'archived';
       return [
@@ -1079,12 +1087,11 @@ export default function Sidebar({
             // this guard the row picks up the pending CSS hue and the
             // ARIA label says "click to start" (wrong for shell tabs).
             const pending = !s.claudeUuid && s.kind !== 'shell';
-            // For shell entries the tab key is the c3 id (App.openTab uses
-            // entry.claudeUuid || entry.id). Use that as the lookup key so
-            // active/open state lights up properly on shell rows.
-            const tabKey = s.kind === 'shell' ? s.id : s.claudeUuid;
-            const isActive = !pending && !!tabKey && tabKey === activeUuid;
-            const isOpen = !pending && !!tabKey && openSet.has(tabKey);
+            // Each pane is uniquely identified by its c3Id; activeC3Id is
+            // the focused pane's c3Id, openSet contains every attached pane.
+            const isActive = !pending && s.id === activeC3Id;
+            const isOpen = !pending && openSet.has(s.id);
+            const openTabIdx = openByC3.get(s.id);
             const className =
               'session' +
               (isActive ? ' active' : '') +
@@ -1155,7 +1162,11 @@ export default function Sidebar({
                     ? `${s.name || s.id} (pending session — click to start)`
                     : undefined
                 }
-                title={cwdLabel}
+                title={
+                  isOpen && openTabIdx !== undefined
+                    ? `Already open in tab ${openTabIdx + 1}${cwdLabel ? ` — ${cwdLabel}` : ''}`
+                    : cwdLabel
+                }
               >
                 <div className="session-name">
                   <span

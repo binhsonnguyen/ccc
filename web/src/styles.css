@@ -643,17 +643,29 @@ code {
 }
 
 .pane {
-  position: absolute;
-  inset: 0;
+  /* Lives inside a .split-cell that already absolute-positions us, so
+     a position: relative here is enough to host the drop-target / overlay
+     children that use position: absolute. */
+  position: relative;
+  width: 100%;
+  height: 100%;
   padding: 6px;
   display: flex;
   flex-direction: column;
+  box-sizing: border-box;
+  /* 2px transparent border slot reserved so toggling .pane-focused
+     doesn't reflow the xterm grid. */
+  border: 2px solid transparent;
 }
 .pane.hidden { display: none; }
+.pane.pane-focused {
+  border-color: var(--accent);
+}
 .pane-host-inner {
   flex: 1;
   min-width: 0;
   min-height: 0;
+  position: relative;
 }
 
 /* xterm internals get their dimensions from the parent. */
@@ -661,6 +673,164 @@ code {
 .pane .xterm-viewport,
 .pane .xterm-screen {
   height: 100% !important;
+}
+
+/* ---- split panels (v0.2.23) -------------------------------------------
+   .pane-host fills the workspace below the tab strip; we render one
+   .split per tab. Inactive .split is display:none so xterm instances
+   stay attached without participating in layout. Single-pane splits use
+   .split-single (one cell, no divider). Two-pane splits lay out as a
+   grid driven by --split-ratio. */
+.split {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: var(--split-ratio, 50%) 6px 1fr;
+  min-height: 0;
+}
+.split.hidden { display: none; }
+.split-single {
+  grid-template-columns: 1fr;
+}
+.split-cell {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.split-divider {
+  cursor: col-resize;
+  background: var(--border, rgba(127,127,127,0.25));
+  user-select: none;
+  touch-action: none;
+  transition: background 80ms linear;
+}
+.split-divider:hover,
+.split-divider:active {
+  background: var(--accent);
+}
+/* Per-pane × button. Only rendered when the tab has ≥2 panes (the
+   tab-strip × already provides "close" for single-pane tabs). Dim by
+   default, full opacity on pane hover/focus. */
+.pane-close {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  z-index: 6;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  color: var(--text-dim);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.3;
+  transition: opacity 80ms ease-out, background 80ms ease-out, color 80ms ease-out;
+}
+.pane:hover > .pane-close,
+.pane.pane-focused > .pane-close,
+.pane-close:hover,
+.pane-close:focus-visible {
+  opacity: 1;
+}
+.pane-close:hover {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--text);
+}
+.pane-close:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Tab-strip split menu (right end of tab bar, sibling of overflow
+   chevron). Trigger glyph (⊟) is always visible; the three kind icons
+   (✦ $_ ↪) are hover-revealed on desktop and always shown on touch.
+   Disabled state: 40% opacity, no-op clicks. */
+.tabbar-split-menu {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 6px 0 8px;
+  border-left: 1px solid var(--border);
+  align-self: stretch;
+  flex: 0 0 auto;
+}
+.tabbar-split-menu.is-disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
+.tabbar-split-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  color: var(--text-dim);
+  font-size: 14px;
+  line-height: 1;
+  user-select: none;
+}
+.tabbar-split-kind {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 0;            /* collapsed by default; expands on menu hover */
+  height: 22px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  overflow: hidden;
+  opacity: 0;
+  border-radius: 3px;
+  transition: width 120ms ease-out, opacity 120ms ease-out,
+              background 80ms ease-out, color 80ms ease-out;
+}
+.tabbar-split-menu:hover .tabbar-split-kind,
+.tabbar-split-menu:focus-within .tabbar-split-kind {
+  width: 22px;
+  opacity: 1;
+}
+.tabbar-split-kind:hover:not(:disabled) {
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.tabbar-split-kind:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+.tabbar-split-menu:hover .tabbar-split-trigger,
+.tabbar-split-menu:focus-within .tabbar-split-trigger {
+  color: var(--text);
+}
+/* Touch / coarse-pointer: pre-expand the three kind icons since hover
+   doesn't fire. Matches the v0.2.21 touch-targets convention. */
+@media (hover: none) and (pointer: coarse) {
+  .tabbar-split-kind {
+    width: 36px;
+    height: 36px;
+    opacity: 1;
+    font-size: 14px;
+  }
+  .tabbar-split-trigger {
+    width: 36px;
+    height: 36px;
+    font-size: 16px;
+  }
+  .pane-close {
+    width: 36px;
+    height: 36px;
+    font-size: 20px;
+    opacity: 1;
+  }
 }
 
 /* ---- inline banner (A4) ----------------------------------------------- */

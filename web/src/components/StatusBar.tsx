@@ -2,10 +2,12 @@ import { useEffect, useRef, useState } from 'react';
 import { formatKeys } from '../lib/shortcuts';
 import { getTerm } from '../lib/terminals';
 import { THEME_NAMES, type ThemeName } from '../lib/themes';
-import type { Tab, TabStatus } from '../types';
+import type { Pane, TabStatus } from '../types';
 
 interface Props {
-  activeTab: Tab | null;
+  // Pane that drives the status bar — App passes the focused pane of
+  // the active tab so the read-out tracks the user's eye.
+  activeTab: Pane | null;
   // Bumped whenever a tab's status/cwd/uuid changes so dims/idle reset.
   // Not strictly needed (we poll), but it lets first-render show the
   // right dims right away on tab switch instead of waiting up to 1 s.

@@ -1,49 +1,57 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useShortcut } from '../lib/shortcuts';
 import { cwdTint } from '../lib/cwdTint';
-import type { Tab } from '../types';
+import { focusedPane, primaryPane, type Tab } from '../types';
 
 interface Props {
   tabs: Tab[];
-  activeUuid: string | null;
-  onSelect: (uuid: string) => void;
-  onClose: (uuid: string) => void;
-  onKill: (uuid: string) => void;
-  // New uuid order after a drag-drop. App owns the tabs[] array; we lift
-  // the reorder request rather than mutate it locally.
-  onReorder: (uuids: string[]) => void;
+  activeTabId: string | null;
+  onSelect: (tabId: string) => void;
+  // Close all panes in a tab (drops the tab). Mapped from older
+  // closeTab(uuid) signature; the App layer fans this out across panes.
+  onCloseTab: (tabId: string) => void;
+  // Kill the focused pane's PTY. App resolves focusedPane(tab) and
+  // dispatches to ptymgr.
+  onKill: (tabId: string) => void;
+  // New tab-id order after a drag-drop.
+  onReorder: (tabIds: string[]) => void;
+  // Split active tab into 2 panes by spawning a new secondary of the
+  // chosen kind. Disabled when active tab already has 2 panes.
+  onSplitActive: (kind: 'claude' | 'shell' | 'bind') => void;
 }
 
 // Pane id derivation must match TerminalPane's wrapper id so aria-controls
-// points at a real node.
-export function paneId(uuid: string): string {
-  return `pane-${uuid}`;
+// points at a real node. We now key on the pane's c3Id (was claudeUuid)
+// because two panes inside one tab can in principle share a claudeUuid
+// during a brief discovery rekey window.
+export function paneId(c3Id: string): string {
+  return `pane-${c3Id}`;
 }
-export function tabId(uuid: string): string {
-  return `tab-${uuid}`;
+export function tabId(c3Id: string): string {
+  return `tab-${c3Id}`;
 }
 
-export default function TabBar({ tabs, activeUuid, onSelect, onClose, onKill, onReorder }: Props) {
-  // Overflow detection (B-4). We measure scrollWidth vs clientWidth on
-  // resize + when tabs change. ResizeObserver is the cheap path; we
-  // don't poll. State drives the fade-mask class + chevron visibility.
+// Mention badge sums across all panes in a tab so a 2-pane tab with
+// hits in the inactive secondary still surfaces the visual cue.
+function tabMentions(tab: Tab): number {
+  let sum = 0;
+  for (const p of tab.panes) sum += p.mentions ?? 0;
+  return sum;
+}
+
+export default function TabBar({ tabs, activeTabId, onSelect, onCloseTab, onKill, onReorder, onSplitActive }: Props) {
   const tabbarRef = useRef<HTMLDivElement | null>(null);
   const [overflow, setOverflow] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const chevronRef = useRef<HTMLButtonElement | null>(null);
-  // Drag-reorder state. draggingUuid is the uuid currently being dragged;
-  // overUuid is the tab cursor is over (for visual line indicator).
-  const [draggingUuid, setDraggingUuid] = useState<string | null>(null);
-  const [overState, setOverState] = useState<{ uuid: string; side: 'left' | 'right' } | null>(null);
-  // confirmingUuid: which tab's kill button is in "armed" state. A second
-  // click while armed actually issues the kill. Auto-disarms after 3s or
-  // when user moves focus away.
-  const [confirmingUuid, setConfirmingUuid] = useState<string | null>(null);
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [overState, setOverState] = useState<{ id: string; side: 'left' | 'right' } | null>(null);
+  const [confirmingId, setConfirmingId] = useState<string | null>(null);
   const confirmTimerRef = useRef<number | null>(null);
   const tabRefs = useRef<Map<string, HTMLDivElement | null>>(new Map());
 
   const disarm = useCallback(() => {
-    setConfirmingUuid(null);
+    setConfirmingId(null);
     if (confirmTimerRef.current) {
       window.clearTimeout(confirmTimerRef.current);
       confirmTimerRef.current = null;
@@ -57,52 +65,43 @@ export default function TabBar({ tabs, activeUuid, onSelect, onClose, onKill, on
   }, []);
 
   const handleKillClick = useCallback(
-    (uuid: string, killing: boolean | undefined) => {
+    (id: string, killing: boolean | undefined) => {
       if (killing) return;
-      if (confirmingUuid === uuid) {
+      if (confirmingId === id) {
         disarm();
-        onKill(uuid);
+        onKill(id);
         return;
       }
-      // Arm: switch this button visually; auto-disarm in 3s.
-      setConfirmingUuid(uuid);
+      setConfirmingId(id);
       if (confirmTimerRef.current) window.clearTimeout(confirmTimerRef.current);
       confirmTimerRef.current = window.setTimeout(() => {
-        setConfirmingUuid(null);
+        setConfirmingId(null);
         confirmTimerRef.current = null;
       }, 3000);
     },
-    [confirmingUuid, disarm, onKill],
+    [confirmingId, disarm, onKill],
   );
 
-  const focusTab = useCallback((uuid: string) => {
-    const el = tabRefs.current.get(uuid);
+  const focusTab = useCallback((id: string) => {
+    const el = tabRefs.current.get(id);
     if (el) el.focus();
   }, []);
 
-  // Enter/Space activate the focused tab — these are role="tab" button
-  // semantics, not app-level shortcuts. Keep them local.
   const onTabKeyDown = useCallback(
-    (e: React.KeyboardEvent<HTMLDivElement>, uuid: string) => {
+    (e: React.KeyboardEvent<HTMLDivElement>, id: string) => {
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
-        onSelect(uuid);
+        onSelect(id);
       }
     },
     [onSelect],
   );
 
-  // Arrow / Home / End / Delete / Backspace tab nav lives in the
-  // shortcut registry (PLAN.md P-3). Scope = 'tab-focused' so the
-  // entries are inert unless a `.tabbar` descendant has focus, which
-  // means the registry only fires when this tablist is the focused
-  // widget. The focused tab's uuid is read off `data-tab-uuid` on the
-  // role="tab" element.
-  const focusedUuid = (): string | null => {
+  const focusedId = (): string | null => {
     const el = document.activeElement;
     if (!el) return null;
-    const tabEl = el.closest<HTMLElement>('[data-tab-uuid]');
-    return tabEl?.dataset.tabUuid ?? null;
+    const tabEl = el.closest<HTMLElement>('[data-tab-id]');
+    return tabEl?.dataset.tabId ?? null;
   };
 
   useShortcut(
@@ -112,13 +111,13 @@ export default function TabBar({ tabs, activeUuid, onSelect, onClose, onKill, on
       scope: 'tab-focused',
       label: 'Previous tab',
       handler: () => {
-        const uuid = focusedUuid();
-        if (uuid === null || tabs.length === 0) return;
-        const idx = tabs.findIndex((t) => t.claudeUuid === uuid);
+        const id = focusedId();
+        if (id === null || tabs.length === 0) return;
+        const idx = tabs.findIndex((t) => t.id === id);
         if (idx < 0) return;
         const next = tabs[(idx - 1 + tabs.length) % tabs.length];
-        onSelect(next.claudeUuid);
-        focusTab(next.claudeUuid);
+        onSelect(next.id);
+        focusTab(next.id);
       },
     },
     [tabs, onSelect, focusTab],
@@ -130,13 +129,13 @@ export default function TabBar({ tabs, activeUuid, onSelect, onClose, onKill, on
       scope: 'tab-focused',
       label: 'Next tab',
       handler: () => {
-        const uuid = focusedUuid();
-        if (uuid === null || tabs.length === 0) return;
-        const idx = tabs.findIndex((t) => t.claudeUuid === uuid);
+        const id = focusedId();
+        if (id === null || tabs.length === 0) return;
+        const idx = tabs.findIndex((t) => t.id === id);
         if (idx < 0) return;
         const next = tabs[(idx + 1) % tabs.length];
-        onSelect(next.claudeUuid);
-        focusTab(next.claudeUuid);
+        onSelect(next.id);
+        focusTab(next.id);
       },
     },
     [tabs, onSelect, focusTab],
@@ -149,8 +148,8 @@ export default function TabBar({ tabs, activeUuid, onSelect, onClose, onKill, on
       label: 'First tab',
       handler: () => {
         if (tabs.length === 0) return;
-        onSelect(tabs[0].claudeUuid);
-        focusTab(tabs[0].claudeUuid);
+        onSelect(tabs[0].id);
+        focusTab(tabs[0].id);
       },
     },
     [tabs, onSelect, focusTab],
@@ -164,8 +163,8 @@ export default function TabBar({ tabs, activeUuid, onSelect, onClose, onKill, on
       handler: () => {
         if (tabs.length === 0) return;
         const last = tabs[tabs.length - 1];
-        onSelect(last.claudeUuid);
-        focusTab(last.claudeUuid);
+        onSelect(last.id);
+        focusTab(last.id);
       },
     },
     [tabs, onSelect, focusTab],
@@ -177,11 +176,11 @@ export default function TabBar({ tabs, activeUuid, onSelect, onClose, onKill, on
       scope: 'tab-focused',
       label: 'Close focused tab',
       handler: () => {
-        const uuid = focusedUuid();
-        if (uuid) onClose(uuid);
+        const id = focusedId();
+        if (id) onCloseTab(id);
       },
     },
-    [onClose],
+    [onCloseTab],
   );
   useShortcut(
     {
@@ -190,11 +189,11 @@ export default function TabBar({ tabs, activeUuid, onSelect, onClose, onKill, on
       scope: 'tab-focused',
       label: 'Close focused tab',
       handler: () => {
-        const uuid = focusedUuid();
-        if (uuid) onClose(uuid);
+        const id = focusedId();
+        if (id) onCloseTab(id);
       },
     },
-    [onClose],
+    [onCloseTab],
   );
 
   useEffect(() => {
@@ -210,8 +209,6 @@ export default function TabBar({ tabs, activeUuid, onSelect, onClose, onKill, on
     return () => ro.disconnect();
   }, [tabs.length]);
 
-  // Close the overflow menu on outside click / ESC. Keep the listener
-  // attachment cheap — only while the menu is open.
   useEffect(() => {
     if (!menuOpen) return;
     const onDoc = (e: MouseEvent) => {
@@ -236,39 +233,37 @@ export default function TabBar({ tabs, activeUuid, onSelect, onClose, onKill, on
     };
   }, [menuOpen]);
 
-  const scrollIntoView = useCallback((uuid: string) => {
-    const el = tabRefs.current.get(uuid);
+  const scrollIntoView = useCallback((id: string) => {
+    const el = tabRefs.current.get(id);
     el?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }, []);
 
   // ---- drag-reorder helpers -------------------------------------------------
-  const onTabDragStart = (e: React.DragEvent<HTMLDivElement>, uuid: string) => {
-    e.dataTransfer.setData('text/plain', uuid);
+  const onTabDragStart = (e: React.DragEvent<HTMLDivElement>, id: string) => {
+    e.dataTransfer.setData('text/plain', id);
     e.dataTransfer.effectAllowed = 'move';
-    setDraggingUuid(uuid);
+    setDraggingId(id);
   };
-  const onTabDragOver = (e: React.DragEvent<HTMLDivElement>, uuid: string) => {
-    if (!draggingUuid || draggingUuid === uuid) return;
+  const onTabDragOver = (e: React.DragEvent<HTMLDivElement>, id: string) => {
+    if (!draggingId || draggingId === id) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
     const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
     const side: 'left' | 'right' = e.clientX < rect.left + rect.width / 2 ? 'left' : 'right';
     setOverState((cur) =>
-      cur && cur.uuid === uuid && cur.side === side ? cur : { uuid, side },
+      cur && cur.id === id && cur.side === side ? cur : { id, side },
     );
   };
-  const onTabDrop = (e: React.DragEvent<HTMLDivElement>, targetUuid: string) => {
+  const onTabDrop = (e: React.DragEvent<HTMLDivElement>, targetId: string) => {
     e.preventDefault();
-    const dragged = e.dataTransfer.getData('text/plain') || draggingUuid;
-    setDraggingUuid(null);
+    const dragged = e.dataTransfer.getData('text/plain') || draggingId;
+    setDraggingId(null);
     setOverState(null);
-    if (!dragged || dragged === targetUuid) return;
-    const order = tabs.map((t) => t.claudeUuid);
+    if (!dragged || dragged === targetId) return;
+    const order = tabs.map((t) => t.id);
     const from = order.indexOf(dragged);
-    const to = order.indexOf(targetUuid);
+    const to = order.indexOf(targetId);
     if (from < 0 || to < 0) return;
-    // Drop-on-self / drop-on-adjacent-same-side = no-op (cursor side
-    // matches current relative position).
     const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
     const side: 'left' | 'right' = e.clientX < rect.left + rect.width / 2 ? 'left' : 'right';
     let insertAt = side === 'left' ? to : to + 1;
@@ -279,7 +274,7 @@ export default function TabBar({ tabs, activeUuid, onSelect, onClose, onKill, on
     onReorder(order);
   };
   const onTabDragEnd = () => {
-    setDraggingUuid(null);
+    setDraggingId(null);
     setOverState(null);
   };
 
@@ -294,22 +289,23 @@ export default function TabBar({ tabs, activeUuid, onSelect, onClose, onKill, on
         aria-label="Open sessions"
       >
       {tabs.map((t) => {
-        const isActive = t.claudeUuid === activeUuid;
-        const armed = confirmingUuid === t.claudeUuid;
-        const isDragging = draggingUuid === t.claudeUuid;
-        const isOver = overState?.uuid === t.claudeUuid;
+        const primary = primaryPane(t);
+        const focused = focusedPane(t);
+        const isActive = t.id === activeTabId;
+        const armed = confirmingId === t.id;
+        const isDragging = draggingId === t.id;
+        const isOver = overState?.id === t.id;
         const overSide = isOver ? overState!.side : null;
-        // C-3: same hue as the sidebar row for this cwd. Active tab's
-        // top-border picks this up via var(--tab-tint) (see styles.css).
-        const tabStyle = { ['--tab-tint' as string]: cwdTint(t.cwd || '') } as React.CSSProperties;
+        const tabStyle = { ['--tab-tint' as string]: cwdTint(primary.cwd || '') } as React.CSSProperties;
+        const mentions = tabMentions(t);
         return (
           <div
-            key={t.claudeUuid}
+            key={t.id}
             ref={(el) => {
-              tabRefs.current.set(t.claudeUuid, el);
+              tabRefs.current.set(t.id, el);
             }}
-            id={tabId(t.claudeUuid)}
-            data-tab-uuid={t.claudeUuid}
+            id={tabId(primary.c3Id)}
+            data-tab-id={t.id}
             className={
               'tab' +
               (isActive ? ' active' : '') +
@@ -318,78 +314,67 @@ export default function TabBar({ tabs, activeUuid, onSelect, onClose, onKill, on
               (overSide === 'right' ? ' drag-over-right' : '')
             }
             style={tabStyle}
-            onClick={() => onSelect(t.claudeUuid)}
-            onKeyDown={(e) => onTabKeyDown(e, t.claudeUuid)}
+            onClick={() => onSelect(t.id)}
+            onKeyDown={(e) => onTabKeyDown(e, t.id)}
             draggable
-            onDragStart={(e) => onTabDragStart(e, t.claudeUuid)}
-            onDragOver={(e) => onTabDragOver(e, t.claudeUuid)}
-            onDrop={(e) => onTabDrop(e, t.claudeUuid)}
+            onDragStart={(e) => onTabDragStart(e, t.id)}
+            onDragOver={(e) => onTabDragOver(e, t.id)}
+            onDrop={(e) => onTabDrop(e, t.id)}
             onDragEnd={onTabDragEnd}
-            // Roving tabindex: only the active tab participates in Tab order.
             tabIndex={isActive ? 0 : -1}
             role="tab"
             aria-selected={isActive}
-            aria-controls={paneId(t.claudeUuid)}
-            title={`${t.name} — ${t.cwd}`}
+            aria-controls={paneId(focused.c3Id)}
+            title={`${primary.name} — ${primary.cwd}`}
           >
-            <span className={`tab-status status-${t.status}`} aria-hidden="true" />
-            {t.kind === 'shell' && (
+            <span className={`tab-status status-${primary.status}`} aria-hidden="true" />
+            {primary.kind === 'shell' && (
               <span className="tab-kind-badge" aria-label="shell tab" title="shell tab">
                 sh
               </span>
             )}
-            <span className="tab-name">{t.name}</span>
-            {!isActive && t.mentions && t.mentions > 0 ? (
+            <span className="tab-name">{primary.name}</span>
+            {!isActive && mentions > 0 ? (
               <span
-                // C-5 mention badge. Inactive tabs only — clearing on
-                // activate is the App's job (see activateTab). `key` on
-                // the count makes React replay the pulse animation
-                // every time the number bumps.
                 className="tab-mentions"
-                aria-label={`${t.mentions} new mention${t.mentions === 1 ? '' : 's'}`}
-                key={t.mentions}
+                aria-label={`${mentions} new mention${mentions === 1 ? '' : 's'}`}
+                key={mentions}
               >
-                {t.mentions > 99 ? '99+' : t.mentions}
+                {mentions > 99 ? '99+' : mentions}
               </span>
             ) : null}
             <button
-              // tabIndex=-1: keep Tab key skipping these so the tablist
-              // stays one focus stop. Users kill via Delete key or click.
               tabIndex={-1}
-              // draggable=false so press-and-hold on the button doesn't
-              // bubble into the parent tab's HTML5 dragstart and turn a
-              // mis-aimed kill click into a reorder gesture.
               draggable={false}
               className={'tab-kill' + (armed ? ' armed' : '')}
-              disabled={t.killing}
+              disabled={focused.killing}
               onClick={(e) => {
                 e.stopPropagation();
-                handleKillClick(t.claudeUuid, t.killing);
+                handleKillClick(t.id, focused.killing);
               }}
               onBlur={() => {
                 if (armed) disarm();
               }}
               title={
-                t.killing
+                focused.killing
                   ? 'Killing…'
                   : armed
                     ? 'Click again to confirm kill'
-                    : 'Kill claude process (terminates PTY; lose scrollback)'
+                    : 'Kill focused pane PTY'
               }
               aria-label={armed ? 'Confirm kill PTY' : 'Kill PTY'}
             >
-              {t.killing ? '…' : armed ? '?' : '⏻'}
+              {focused.killing ? '…' : armed ? '?' : '⏻'}
             </button>
             <button
               tabIndex={-1}
-              // see tab-kill above
               draggable={false}
               className="tab-close"
-              disabled={t.killing}
+              disabled={focused.killing}
               onClick={(e) => {
                 e.stopPropagation();
-                if (t.killing) return;
-                onClose(t.claudeUuid);
+                if (focused.killing) return;
+                onCloseTab(t.id);
               }}
               title="Detach (close tab; PTY keeps running, reattach later)"
               aria-label="Detach tab"
@@ -400,6 +385,51 @@ export default function TabBar({ tabs, activeUuid, onSelect, onClose, onKill, on
         );
       })}
       </div>
+      {(() => {
+        const active = activeTabId ? tabs.find((t) => t.id === activeTabId) : null;
+        // Disable when there's no active tab or it's already split.
+        // Hovering / touching the strip expands the 3 kind icons inline.
+        const disabled = !active || active.panes.length === 2;
+        return (
+          <div
+            className={'tabbar-split-menu' + (disabled ? ' is-disabled' : '')}
+            role="group"
+            aria-label="Split active tab"
+          >
+            <span className="tabbar-split-trigger" aria-hidden="true">⊟</span>
+            <button
+              type="button"
+              className="tabbar-split-kind"
+              onClick={() => !disabled && onSplitActive('claude')}
+              disabled={disabled}
+              aria-label="Split with Claude session"
+              data-tooltip="Split: new Claude session"
+            >
+              <span aria-hidden="true">✦</span>
+            </button>
+            <button
+              type="button"
+              className="tabbar-split-kind"
+              onClick={() => !disabled && onSplitActive('shell')}
+              disabled={disabled}
+              aria-label="Split with shell"
+              data-tooltip="Split: new shell"
+            >
+              <span aria-hidden="true">$_</span>
+            </button>
+            <button
+              type="button"
+              className="tabbar-split-kind"
+              onClick={() => !disabled && onSplitActive('bind')}
+              disabled={disabled}
+              aria-label="Split with bound Claude session"
+              data-tooltip="Split: adopt existing Claude session"
+            >
+              <span aria-hidden="true">↪</span>
+            </button>
+          </div>
+        );
+      })()}
       {overflow && (
         <button
           ref={chevronRef}
@@ -420,29 +450,31 @@ export default function TabBar({ tabs, activeUuid, onSelect, onClose, onKill, on
           role="menu"
           aria-label="All tabs"
         >
-          {tabs.map((t) => (
-            <button
-              key={t.claudeUuid}
-              type="button"
-              role="menuitem"
-              className={
-                'tabbar-overflow-item' +
-                (t.claudeUuid === activeUuid ? ' active' : '')
-              }
-              onClick={() => {
-                onSelect(t.claudeUuid);
-                scrollIntoView(t.claudeUuid);
-                setMenuOpen(false);
-                chevronRef.current?.focus();
-              }}
-            >
-              <span
-                className={`tab-status status-${t.status}`}
-                aria-hidden="true"
-              />
-              <span className="tabbar-overflow-name">{t.name}</span>
-            </button>
-          ))}
+          {tabs.map((t) => {
+            const primary = primaryPane(t);
+            return (
+              <button
+                key={t.id}
+                type="button"
+                role="menuitem"
+                className={
+                  'tabbar-overflow-item' + (t.id === activeTabId ? ' active' : '')
+                }
+                onClick={() => {
+                  onSelect(t.id);
+                  scrollIntoView(t.id);
+                  setMenuOpen(false);
+                  chevronRef.current?.focus();
+                }}
+              >
+                <span
+                  className={`tab-status status-${primary.status}`}
+                  aria-hidden="true"
+                />
+                <span className="tabbar-overflow-name">{primary.name}</span>
+              </button>
+            );
+          })}
         </div>
       )}
     </div>
