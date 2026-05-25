@@ -881,15 +881,19 @@ function AppInner() {
         />
       </div>
       <main className="workspace">
-        <TabBar
-          tabs={tabs}
-          activeTabId={activeTabId}
-          onSelect={activateTab}
-          onCloseTab={closeTab}
-          onKill={killTab}
-          onReorder={reorderTabs}
-          onSplitActive={(kind) => void splitActiveTab(kind)}
-        />
+        {/* Hide the tab strip at ≤1 tab — a lone tab pill just duplicates
+            the status-bar read-out. The split affordance moved to the
+            StatusBar so it survives this. */}
+        {tabs.length > 1 && (
+          <TabBar
+            tabs={tabs}
+            activeTabId={activeTabId}
+            onSelect={activateTab}
+            onCloseTab={closeTab}
+            onKill={killTab}
+            onReorder={reorderTabs}
+          />
+        )}
         <div className="pane-host">
           {creatingSession ? (
             <>
@@ -963,6 +967,8 @@ function AppInner() {
               themeName={themeName}
               onThemeChange={onThemeChange}
               onOpenDims={() => setDimsDialogOpen(true)}
+              canSplit={!!activeTab && activeTab.panes.length === 1}
+              onSplitActive={(kind) => void splitActiveTab(kind)}
               onCopyCwd={(cwd) => {
                 if (!cwd) return;
                 if (!navigator.clipboard) {

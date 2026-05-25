@@ -751,13 +751,13 @@ code {
    chevron). Trigger glyph (⊟) is always visible; the three kind icons
    (✦ $_ ↪) are hover-revealed on desktop and always shown on touch.
    Disabled state: 40% opacity, no-op clicks. */
+/* Split menu now lives in the StatusBar (was the TabBar). No border-left
+   or stretch — the status bar uses `·` separators and a fixed row
+   height, so the menu just sits inline like the other status items. */
 .tabbar-split-menu {
   display: flex;
   align-items: center;
   gap: 2px;
-  padding: 0 6px 0 8px;
-  border-left: 1px solid var(--border);
-  align-self: stretch;
   flex: 0 0 auto;
 }
 .tabbar-split-menu.is-disabled {
@@ -768,10 +768,10 @@ code {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
+  width: 18px;
+  height: 18px;
   color: var(--text-dim);
-  font-size: 14px;
+  font-size: 13px;
   line-height: 1;
   user-select: none;
 }
@@ -780,7 +780,7 @@ code {
   align-items: center;
   justify-content: center;
   width: 0;            /* collapsed by default; expands on menu hover */
-  height: 22px;
+  height: 18px;
   padding: 0;
   background: transparent;
   border: 0;
@@ -796,7 +796,7 @@ code {
 }
 .tabbar-split-menu:hover .tabbar-split-kind,
 .tabbar-split-menu:focus-within .tabbar-split-kind {
-  width: 22px;
+  width: 18px;
   opacity: 1;
 }
 .tabbar-split-kind:hover:not(:disabled) {
@@ -1762,6 +1762,25 @@ code {
   color: var(--text-dim);
 }
 .statusbar-uuid { color: var(--text-faint); }
+
+/* Narrow viewports: the split menu (now in the status bar) + theme
+   toggle are the must-keep right-side controls. Drop the low-value
+   read-outs (uuid, status-age, the Mod+K hint) to avoid overflow —
+   especially on touch where the split icons are pre-expanded. The
+   adjacent `·` separators go too so we don't leave orphans. */
+@media (max-width: 640px) {
+  .statusbar-uuid,
+  .statusbar-idle,
+  .statusbar kbd {
+    display: none;
+  }
+  .statusbar-right .statusbar-uuid + .statusbar-sep,
+  .statusbar-right .statusbar-idle + .statusbar-sep,
+  .statusbar-right kbd + .statusbar-sep {
+    display: none;
+  }
+}
+
 /* ---- sidebar filter (B-2) -------------------------------------------- */
 
 .sidebar-filter {
