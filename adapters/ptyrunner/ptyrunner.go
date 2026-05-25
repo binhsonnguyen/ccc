@@ -183,10 +183,19 @@ func Start(cwd, uuid, firstPrompt string) (*Session, error) {
 }
 
 // StartShell spawns a plain shell PTY in cwd. argv == nil ⇒ default
-// (`$SHELL -i`; `/bin/bash -i` when SHELL is empty). Non-nil argv is
-// used verbatim; argv[0] is resolved via exec.LookPath. No PATH-fallback
-// scan like resolveClaude — shells are universally on PATH and a custom
-// argv is the user's contract.
+// (`$SHELL -l -i`; `/bin/bash -l -i` when SHELL is empty). Non-nil argv
+// is used verbatim; argv[0] is resolved via exec.LookPath. No PATH-
+// fallback scan like resolveClaude — shells are universally on PATH and
+// a custom argv is the user's contract.
+//
+// We pass BOTH -l (login) and -i (interactive) so the shell sources the
+// login init files (.zprofile/.zlogin, .bash_profile) in addition to
+// the interactive rc (.zshrc/.bashrc). This matches Terminal.app /
+// iTerm / VSCode, which all launch login+interactive shells. Without -l
+// the daemon's stripped launchd PATH never gets the augmentation that
+// most tool managers (Homebrew shellenv, pnpm/PNPM_HOME, nvm, volta)
+// place in .zprofile — leading to "pnpm: not found" etc. inside c3
+// shell tabs even though the same command works in VSCode.
 //
 // IMPORTANT: this path must NOT write anything under ~/.claude/projects.
 // We don't touch claudefs from here and we don't pass --session-id to
@@ -197,7 +206,7 @@ func StartShell(cwd string, argv []string) (*Session, error) {
 		if sh == "" {
 			sh = "/bin/bash"
 		}
-		argv = []string{sh, "-i"}
+		argv = []string{sh, "-l", "-i"}
 	}
 	if len(argv) == 0 {
 		return nil, fmt.Errorf("ptyrunner: empty argv")
