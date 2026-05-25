@@ -15,9 +15,6 @@ interface Props {
   onKill: (tabId: string) => void;
   // New tab-id order after a drag-drop.
   onReorder: (tabIds: string[]) => void;
-  // Split active tab into 2 panes by spawning a new secondary of the
-  // chosen kind. Disabled when active tab already has 2 panes.
-  onSplitActive: (kind: 'claude' | 'shell' | 'bind') => void;
 }
 
 // Pane id derivation must match TerminalPane's wrapper id so aria-controls
@@ -39,7 +36,7 @@ function tabMentions(tab: Tab): number {
   return sum;
 }
 
-export default function TabBar({ tabs, activeTabId, onSelect, onCloseTab, onKill, onReorder, onSplitActive }: Props) {
+export default function TabBar({ tabs, activeTabId, onSelect, onCloseTab, onKill, onReorder }: Props) {
   const tabbarRef = useRef<HTMLDivElement | null>(null);
   const [overflow, setOverflow] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -385,51 +382,6 @@ export default function TabBar({ tabs, activeTabId, onSelect, onCloseTab, onKill
         );
       })}
       </div>
-      {(() => {
-        const active = activeTabId ? tabs.find((t) => t.id === activeTabId) : null;
-        // Disable when there's no active tab or it's already split.
-        // Hovering / touching the strip expands the 3 kind icons inline.
-        const disabled = !active || active.panes.length === 2;
-        return (
-          <div
-            className={'tabbar-split-menu' + (disabled ? ' is-disabled' : '')}
-            role="group"
-            aria-label="Split active tab"
-          >
-            <span className="tabbar-split-trigger" aria-hidden="true">⊟</span>
-            <button
-              type="button"
-              className="tabbar-split-kind"
-              onClick={() => !disabled && onSplitActive('claude')}
-              disabled={disabled}
-              aria-label="Split with Claude session"
-              data-tooltip="Split: new Claude session"
-            >
-              <span aria-hidden="true">✦</span>
-            </button>
-            <button
-              type="button"
-              className="tabbar-split-kind"
-              onClick={() => !disabled && onSplitActive('shell')}
-              disabled={disabled}
-              aria-label="Split with shell"
-              data-tooltip="Split: new shell"
-            >
-              <span aria-hidden="true">$_</span>
-            </button>
-            <button
-              type="button"
-              className="tabbar-split-kind"
-              onClick={() => !disabled && onSplitActive('bind')}
-              disabled={disabled}
-              aria-label="Split with bound Claude session"
-              data-tooltip="Split: adopt existing Claude session"
-            >
-              <span aria-hidden="true">↪</span>
-            </button>
-          </div>
-        );
-      })()}
       {overflow && (
         <button
           ref={chevronRef}

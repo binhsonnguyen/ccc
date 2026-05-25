@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { formatKeys } from '../lib/shortcuts';
 import { getTerm } from '../lib/terminals';
 import { THEME_NAMES, type ThemeName } from '../lib/themes';
+import SplitMenu from './SplitMenu';
 import type { Pane, TabStatus } from '../types';
 
 interface Props {
@@ -17,6 +18,11 @@ interface Props {
   onThemeChange: (n: ThemeName) => void;
   // Click handler for the cols×rows read-out. App opens the dims dialog.
   onOpenDims: () => void;
+  // Split affordance lives here (not the TabBar) so it survives the
+  // TabBar being hidden at 1 tab. canSplit = active tab has exactly 1
+  // pane.
+  canSplit: boolean;
+  onSplitActive: (kind: 'claude' | 'shell' | 'bind') => void;
 }
 
 // Per-theme glyph + human label for the cycle button. Glyphs picked to
@@ -158,7 +164,7 @@ const STATE_LABEL: Record<TabStatus, string> = {
   error: 'error',
 };
 
-export default function StatusBar({ activeTab, pulse, onCopyCwd, themeName, onThemeChange, onOpenDims }: Props) {
+export default function StatusBar({ activeTab, pulse, onCopyCwd, themeName, onThemeChange, onOpenDims, canSplit, onSplitActive }: Props) {
   // 1 Hz tick drives both the dims read-out and idle counter without
   // forcing a render every WS frame. Cheap and keeps the bar quiet.
   const [, setTick] = useState(0);
@@ -190,6 +196,8 @@ export default function StatusBar({ activeTab, pulse, onCopyCwd, themeName, onTh
       <footer className="statusbar statusbar-empty" aria-label="Status bar">
         <span className="statusbar-empty-label">No active tab</span>
         <div className="statusbar-right">
+          <SplitMenu canSplit={canSplit} onSplitActive={onSplitActive} />
+          <span className="statusbar-sep" aria-hidden="true">·</span>
           <ThemeToggle themeName={themeName} onThemeChange={onThemeChange} />
         </div>
       </footer>
@@ -253,6 +261,8 @@ export default function StatusBar({ activeTab, pulse, onCopyCwd, themeName, onTh
       </div>
 
       <div className="statusbar-right">
+        <SplitMenu canSplit={canSplit} onSplitActive={onSplitActive} />
+        <span className="statusbar-sep" aria-hidden="true">·</span>
         <span className="statusbar-uuid" title={activeTab.claudeUuid}>
           id {uuidShort}
         </span>
