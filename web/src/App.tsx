@@ -828,6 +828,24 @@ function AppInner() {
   const activeC3Id = activeTab ? focusedPane(activeTab).c3Id : null;
   const activePane: Pane | null = activeTab ? focusedPane(activeTab) : null;
 
+  // Auto-focus the active pane's xterm whenever the active tab or the
+  // focused pane changes — so switching tabs (click / palette / keyboard)
+  // or focusing a split pane lets the user type immediately, no second
+  // click into the terminal. rAF so the focus lands after the pane's
+  // visibility toggle settles in the DOM. Skipped while an overlay owns
+  // focus (NewSessionPane prompt, palette, cheatsheet, dims dialog) so we
+  // don't yank focus out from under those inputs.
+  const overlayOpen = creatingSession || paletteOpen || cheatsheetOpen || dimsDialogOpen;
+  useEffect(() => {
+    if (!activeC3Id || overlayOpen) return;
+    const uuid = activePane?.claudeUuid;
+    if (!uuid) return;
+    const raf = requestAnimationFrame(() => {
+      try { getTerm(uuid)?.term.focus(); } catch { /* term may be disposing */ }
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [activeC3Id, overlayOpen, activePane?.claudeUuid]);
+
   return (
     <div className={appClass}>
       {narrow && (
