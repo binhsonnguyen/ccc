@@ -520,6 +520,12 @@ function AppInner() {
           : tt,
       );
     });
+    setBellSet((prev) => {
+      if (!prev.has(c3Id)) return prev;
+      const next = new Set(prev);
+      next.delete(c3Id);
+      return next;
+    });
   }, []);
 
   // closeTab drops all panes of a tab. Used by the × button + Delete
@@ -527,6 +533,7 @@ function AppInner() {
   const closeTab = useCallback((tabId: string) => {
     const target = tabsRef.current.find((t) => t.id === tabId);
     if (!target) return;
+    const dyingC3Ids = target.panes.map((p) => p.c3Id);
     for (const p of target.panes) disposeTerm(p.claudeUuid);
     setTabs((prev) => {
       const nextTabs = prev.filter((t) => t.id !== tabId);
@@ -536,6 +543,12 @@ function AppInner() {
         });
       }
       return nextTabs;
+    });
+    setBellSet((prev) => {
+      if (!dyingC3Ids.some((id) => prev.has(id))) return prev;
+      const next = new Set(prev);
+      dyingC3Ids.forEach((id) => next.delete(id));
+      return next;
     });
   }, []);
 

@@ -904,6 +904,25 @@ func handleSessionPTY(w http.ResponseWriter, r *http.Request, id, originHost, or
 
 	// 3. Read loop: forward binary frames as stdin, text frames as control.
 	ctx := r.Context()
+
+	// Keepalive: ping every 20 s so we detect zombie connections (e.g.
+	// after laptop sleep) before the TCP timeout fires. coder/websocket
+	// Ping() blocks until pong arrives or ctx is cancelled; a dead conn
+	// will cause Ping to error, which we ignore here — the concurrent
+	// Read() will also error and exit the read loop cleanly.
+	go func() {
+		t := time.NewTicker(20 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				_ = conn.Ping(ctx)
+			}
+		}
+	}()
+
 	for {
 		typ, data, err := conn.Read(ctx)
 		if err != nil {
