@@ -270,6 +270,10 @@ export default function Sidebar({
   // commitRename. ref (not state) because commitRename is called in the
   // same tick as the unmount/blur sequence.
   const renameCancelledRef = useRef(false);
+  // Set to true in startRename so closeMenuLocal's setTimeout skips focus
+  // restoration (which would steal focus from the autoFocus'd input, trigger
+  // onBlur → commitRename, and immediately dismiss the input).
+  const renameStartingRef = useRef(false);
   const [renameDraft, setRenameDraft] = useState('');
   const [creating, setCreating] = useState(false);
   // When the inline form opens for the Bind flow, force its mode to
@@ -453,8 +457,11 @@ export default function Sidebar({
     const rowId = menu?.rowId;
     setMenu(null);
     if (rowId) {
-      // restore focus to row
       window.setTimeout(() => {
+        if (renameStartingRef.current) {
+          renameStartingRef.current = false;
+          return;
+        }
         const el = rowRefs.current.get(rowId);
         el?.focus?.();
       }, 0);
@@ -513,6 +520,7 @@ export default function Sidebar({
   );
 
   const startRename = useCallback((s: C3Entry) => {
+    renameStartingRef.current = true;
     setRenamingId(s.id);
     setRenameDraft(s.name || '');
   }, []);
