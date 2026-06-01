@@ -41,6 +41,10 @@ interface Props {
   // closes just this pane. Hidden on single-pane tabs (where the
   // tab-strip × already provides "close" semantics).
   showPaneCloseButton?: boolean;
+  // Called when the PTY emits a BEL character and the pane is not
+  // currently visible (i.e. not the active tab). Use to set an
+  // attention badge on the sidebar row.
+  onBell?: (c3Id: string) => void;
 }
 
 // Threshold beyond which we surface the "session idle" banner. 30 minutes
@@ -110,6 +114,7 @@ export default function TerminalPane({
   colCap,
   rowCap,
   showPaneCloseButton,
+  onBell,
 }: Props) {
   const { showToast } = useToast();
 
@@ -315,6 +320,10 @@ export default function TerminalPane({
       }
     });
 
+    const bellDisposable = entry.term.onBell(() => {
+      if (!visibleRef.current) onBell?.(pane.c3Id);
+    });
+
     const ro = new ResizeObserver(() => {
       if (entry.resizeTimer) window.clearTimeout(entry.resizeTimer);
       entry.resizeTimer = window.setTimeout(() => {
@@ -331,6 +340,7 @@ export default function TerminalPane({
     return () => {
       ro.disconnect();
       dataDisposable.dispose();
+      bellDisposable.dispose();
       const ws = entry.ws;
       if (ws && ws.readyState <= WebSocket.OPEN) {
         try {

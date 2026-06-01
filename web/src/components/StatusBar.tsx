@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { formatKeys } from '../lib/shortcuts';
 import { getTerm } from '../lib/terminals';
 import { THEME_NAMES, type ThemeName } from '../lib/themes';
+import { TAB_BAR_MODE_META, type TabBarMode } from '../lib/tabBarMode';
 import SplitMenu from './SplitMenu';
 import type { Pane, TabStatus } from '../types';
 
@@ -16,6 +17,8 @@ interface Props {
   onCopyCwd: (cwd: string) => void;
   themeName: ThemeName;
   onThemeChange: (n: ThemeName) => void;
+  tabBarMode: TabBarMode;
+  onTabBarModeChange: (m: TabBarMode) => void;
   // Click handler for the cols×rows read-out. App opens the dims dialog.
   onOpenDims: () => void;
   // Split affordance lives here (not the TabBar) so it survives the
@@ -154,6 +157,21 @@ function formatAge(ms: number): string {
   return `${Math.floor(h / 24)}d`;
 }
 
+function TabBarModeButton({ mode, onChange }: { mode: TabBarMode; onChange: (m: TabBarMode) => void }) {
+  const meta = TAB_BAR_MODE_META[mode];
+  return (
+    <button
+      type="button"
+      className="statusbar-tabmode"
+      title={`Tab bar: ${meta.label}. Click to cycle.`}
+      aria-label={`Tab bar mode: ${meta.label}`}
+      onClick={() => onChange(meta.next)}
+    >
+      <span className="statusbar-tabmode-glyph" aria-hidden="true">{meta.glyph}</span>
+    </button>
+  );
+}
+
 const STATE_LABEL: Record<TabStatus, string> = {
   connecting: 'connecting',
   pending: 'pending',
@@ -164,7 +182,7 @@ const STATE_LABEL: Record<TabStatus, string> = {
   error: 'error',
 };
 
-export default function StatusBar({ activeTab, pulse, onCopyCwd, themeName, onThemeChange, onOpenDims, canSplit, onSplitActive }: Props) {
+export default function StatusBar({ activeTab, pulse, onCopyCwd, themeName, onThemeChange, tabBarMode, onTabBarModeChange, onOpenDims, canSplit, onSplitActive }: Props) {
   // 1 Hz tick drives both the dims read-out and idle counter without
   // forcing a render every WS frame. Cheap and keeps the bar quiet.
   const [, setTick] = useState(0);
@@ -197,6 +215,8 @@ export default function StatusBar({ activeTab, pulse, onCopyCwd, themeName, onTh
         <span className="statusbar-empty-label">No active tab</span>
         <div className="statusbar-right">
           <SplitMenu canSplit={canSplit} onSplitActive={onSplitActive} />
+          <span className="statusbar-sep" aria-hidden="true">·</span>
+          <TabBarModeButton mode={tabBarMode} onChange={onTabBarModeChange} />
           <span className="statusbar-sep" aria-hidden="true">·</span>
           <ThemeToggle themeName={themeName} onThemeChange={onThemeChange} />
         </div>
@@ -274,6 +294,8 @@ export default function StatusBar({ activeTab, pulse, onCopyCwd, themeName, onTh
         <kbd title="Command palette (coming soon)">
           {formatKeys('Mod+k')}
         </kbd>
+        <span className="statusbar-sep" aria-hidden="true">·</span>
+        <TabBarModeButton mode={tabBarMode} onChange={onTabBarModeChange} />
         <span className="statusbar-sep" aria-hidden="true">·</span>
         <ThemeToggle themeName={themeName} onThemeChange={onThemeChange} />
       </div>

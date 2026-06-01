@@ -65,6 +65,11 @@ interface Props {
   onWidthChange: (w: number) => void;
   // Drawer mode hides the handle (sidebar is fixed-position 280px).
   resizable: boolean;
+  // c3Ids of panes that emitted a BEL while not visible. Cleared by App
+  // when the owning tab is activated.
+  bellSet?: Set<string>;
+  // c3Id → exitCode for panes that have exited and are still open.
+  exitMap?: Map<string, number>;
 }
 
 const SIDEBAR_W_MIN = 200;
@@ -177,6 +182,8 @@ export default function Sidebar({
   width,
   onWidthChange,
   resizable,
+  bellSet,
+  exitMap,
 }: Props) {
   // Resize drag state. We don't put `dragging` in React state (would
   // rerender on every mouse move); we mark the DOM with a class for the
@@ -1235,6 +1242,22 @@ export default function Sidebar({
                       )}
                       {isOpen && !pending && (
                         <span className="dot" aria-label="Open in tab" />
+                      )}
+                      {bellSet?.has(s.id) && (
+                        <span
+                          className="sidebar-attn-dot"
+                          aria-label="Waiting for input"
+                          title="Session is waiting for input"
+                        />
+                      )}
+                      {exitMap?.has(s.id) && (
+                        <span
+                          className={exitMap.get(s.id) === 0 ? 'sidebar-exit-ok' : 'sidebar-exit-err'}
+                          aria-label={`Exited with code ${exitMap.get(s.id)}`}
+                          title={`Exited with code ${exitMap.get(s.id)}`}
+                        >
+                          {exitMap.get(s.id) === 0 ? '✓' : '✗'}
+                        </span>
                       )}
                     </>
                   )}

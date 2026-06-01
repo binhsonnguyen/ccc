@@ -539,6 +539,32 @@ code {
   margin-left: 4px;
 }
 
+/* Bell attention dot: amber pulse on non-active sidebar rows */
+.sidebar-attn-dot {
+  display: inline-block;
+  width: 6px; height: 6px; border-radius: 50%;
+  background: #f59e0b;
+  margin-left: 4px;
+  flex-shrink: 0;
+  animation: attn-pulse 1.6s ease-in-out infinite;
+}
+@keyframes attn-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+/* Exit status badges on sidebar rows */
+.sidebar-exit-ok,
+.sidebar-exit-err {
+  font-size: 10px;
+  font-weight: 700;
+  margin-left: 4px;
+  flex-shrink: 0;
+  line-height: 1;
+}
+.sidebar-exit-ok { color: #22c55e; }
+.sidebar-exit-err { color: #ef4444; }
+
 /* ---- workspace --------------------------------------------------------- */
 
 .workspace {
@@ -1682,7 +1708,8 @@ code {
 }
 /* Theme cycle button. Mirrors the .statusbar-cwd affordance: borderless,
    dim until hover, small glyph + label. */
-.statusbar-theme {
+.statusbar-theme,
+.statusbar-tabmode {
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -1694,8 +1721,10 @@ code {
   padding: 1px 4px;
   border-radius: 4px;
 }
-.statusbar-theme:hover { color: var(--text); background: var(--overlay); }
-.statusbar-theme-glyph { font-size: 12px; line-height: 1; }
+.statusbar-theme:hover,
+.statusbar-tabmode:hover { color: var(--text); background: var(--overlay); }
+.statusbar-theme-glyph,
+.statusbar-tabmode-glyph { font-size: 12px; line-height: 1; }
 /* Theme menu anchors to the toggle and opens UPWARD (status bar is at
    the page bottom). Right-aligned so it doesn't spill off-screen. */
 .statusbar-theme-wrap { position: relative; }

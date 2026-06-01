@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Sidebar, { type SidebarView } from './components/Sidebar';
 import StatusBar from './components/StatusBar';
 import TabBar from './components/TabBar';
@@ -19,6 +19,7 @@ import { archiveSession, createSession, listSessions } from './lib/api';
 import { useShortcut } from './lib/shortcuts';
 import { disposeTerm, getTerm } from './lib/terminals';
 import { applyTheme, getCurrentTheme, type ThemeName } from './lib/themes';
+import { loadTabBarMode, saveTabBarMode, type TabBarMode } from './lib/tabBarMode';
 import { useZenMode } from './lib/useZenMode';
 import { parseTabUrl, writeTabUrl } from './lib/url-state';
 import {
@@ -141,6 +142,17 @@ function AppInner() {
   const initialUrlStateRef = useRef(
     typeof window !== 'undefined' ? parseTabUrl(window.location.hash) : { ids: [], active: null },
   );
+  const [tabBarMode, setTabBarMode] = useState<TabBarMode>(loadTabBarMode);
+  const onTabBarModeChange = useCallback((m: TabBarMode) => {
+    setTabBarMode(m);
+    saveTabBarMode(m);
+  }, []);
+
+  const [bellSet, setBellSet] = useState<Set<string>>(new Set());
+  const onBell = useCallback((c3Id: string) => {
+    setBellSet((prev) => (prev.has(c3Id) ? prev : new Set([...prev, c3Id])));
+  }, []);
+
   const [view, setView] = useState<SidebarView>('active');
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [cheatsheetOpen, setCheatsheetOpen] = useState(false);
@@ -186,7 +198,7 @@ function AppInner() {
 
   const zenFaded = useZenMode();
 
-  // activateTab clears the focused pane's mention badge.
+  // activateTab clears the focused pane's mention badge and any bell flag.
   const activateTab = useCallback((tabId: string | null) => {
     setActiveTabId(tabId);
     if (tabId !== null) setCreatingSession(false);
@@ -205,6 +217,17 @@ function AppInner() {
           : { ...t, panes: [t.panes[0], cleared] as [Pane, Pane] };
       }),
     );
+    // Clear bell flags for all panes in the activated tab.
+    const tab = tabsRef.current.find((t) => t.id === tabId);
+    if (tab) {
+      const ids = tab.panes.map((p) => p.c3Id);
+      setBellSet((prev) => {
+        if (!ids.some((id) => prev.has(id))) return prev;
+        const next = new Set(prev);
+        ids.forEach((id) => next.delete(id));
+        return next;
+      });
+    }
   }, []);
 
   // Focus a specific pane (by c3Id) within whatever tab owns it.
@@ -828,6 +851,19 @@ function AppInner() {
   const activeC3Id = activeTab ? focusedPane(activeTab).c3Id : null;
   const activePane: Pane | null = activeTab ? focusedPane(activeTab) : null;
 
+  // Map c3Id → exitCode for all panes that have exited and are still open.
+  const exitMap = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const t of tabs) {
+      for (const p of t.panes) {
+        if (p.status === 'exited' && p.exitCode !== undefined) {
+          m.set(p.c3Id, p.exitCode);
+        }
+      }
+    }
+    return m;
+  }, [tabs]);
+
   // Auto-focus the active pane's xterm whenever the active tab or the
   // focused pane changes — so switching tabs (click / palette / keyboard)
   // or focusing a split pane lets the user type immediately, no second
@@ -896,13 +932,14 @@ function AppInner() {
             startCreatingSession();
           }}
           onCloseMainPane={() => setCreatingSession(false)}
+          bellSet={bellSet}
+          exitMap={exitMap}
         />
       </div>
       <main className="workspace">
-        {/* Hide the tab strip at ≤1 tab — a lone tab pill just duplicates
-            the status-bar read-out. The split affordance moved to the
-            StatusBar so it survives this. */}
-        {tabs.length > 1 && (
+        {/* Tab bar visibility respects the tabBarMode setting:
+            'auto' = hide at 1 tab, 'never' = always hidden, 'always' = always shown. */}
+        {(tabBarMode === 'always' || (tabBarMode === 'auto' && tabs.length > 1)) && (
           <TabBar
             tabs={tabs}
             activeTabId={activeTabId}
@@ -941,6 +978,7 @@ function AppInner() {
                   onRatioChange={setRatio}
                   colCap={colCap}
                   rowCap={rowCap}
+                  onBell={onBell}
                 />
               ))}
             </>
@@ -984,6 +1022,8 @@ function AppInner() {
               pulse={pulse}
               themeName={themeName}
               onThemeChange={onThemeChange}
+              tabBarMode={tabBarMode}
+              onTabBarModeChange={onTabBarModeChange}
               onOpenDims={() => setDimsDialogOpen(true)}
               canSplit={!!activeTab && activeTab.panes.length === 1}
               onSplitActive={(kind) => void splitActiveTab(kind)}

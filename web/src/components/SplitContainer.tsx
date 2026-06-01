@@ -22,6 +22,7 @@ interface Props {
   onRatioChange: (tabId: string, ratio: number) => void;
   colCap: number | null;
   rowCap: number | null;
+  onBell?: (c3Id: string) => void;
 }
 
 const RATIO_MIN = 0.1;
@@ -35,6 +36,7 @@ export default function SplitContainer(props: Props) {
     onClosePane,
     onFocusPane,
     onRatioChange,
+    onBell,
   } = props;
 
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -109,6 +111,7 @@ export default function SplitContainer(props: Props) {
           // Single-pane tabs use the tab-strip × — adding another inside
           // the pane would duplicate the affordance.
           showPaneCloseButton={isMulti}
+          onBell={onBell}
         />
       </div>
     );
