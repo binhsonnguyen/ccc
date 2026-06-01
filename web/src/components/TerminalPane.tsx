@@ -274,6 +274,15 @@ export default function TerminalPane({
             // (or older bundle in another tab) had disabled it.
             entry.term.options.disableStdin = false;
             onReady(uuid);
+          } else if (msg.type === 'turn_complete') {
+            // Server detected JSONL growth → Claude finished a turn.
+            // Cancel the idle-based heuristic timer (no need to wait 4s)
+            // and immediately surface the attention badge if not visible.
+            if (bellTimerRef.current !== null) {
+              window.clearTimeout(bellTimerRef.current);
+              bellTimerRef.current = null;
+            }
+            if (!visibleRef.current) onBell?.(pane.c3Id);
           }
           return;
         }

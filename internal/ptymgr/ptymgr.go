@@ -15,6 +15,7 @@ package ptymgr
 
 import (
 	"io"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -84,6 +85,7 @@ type Client interface {
 type Session struct {
 	Key  string
 	UUID string
+	cwd  string // working directory; used to build the JSONL watcher path
 	pty  *ptyrunner.Session
 
 	mu       sync.Mutex
@@ -500,6 +502,7 @@ func (m *Manager) AttachSpec(key string, spec SpawnSpec, c Client) (*Session, er
 		s = &Session{
 			Key:          key,
 			UUID:         spec.ClaudeUUID, // empty for shell, kept for symmetry
+			cwd:          spec.CWD,
 			pty:          p,
 			ring:         newRing(scrollbackSize),
 			done:         make(chan struct{}),
@@ -511,6 +514,12 @@ func (m *Manager) AttachSpec(key string, spec SpawnSpec, c Client) (*Session, er
 			s.stopDiscovery = make(chan struct{})
 			snapshot := snapshotProjectUUIDs(m.claudeScan, spec.CWD)
 			go m.discoveryLoop(s, spec.CWD, snapshot)
+		}
+		// JSONL watcher: start immediately when UUID is already known (resume
+		// or first-prompt flow). Pending sessions start it in discoveryLoop
+		// once the UUID is discovered.
+		if !spec.isShell() && spec.ClaudeUUID != "" {
+			go s.jsonlWatchLoop()
 		}
 		m.sessions[key] = s
 		go m.readLoop(s)
@@ -767,6 +776,8 @@ func (m *Manager) discoveryLoop(s *Session, cwd string, before map[string]bool) 
 			s.Key = x.UUID
 			c := s.client
 			s.mu.Unlock()
+			// JSONL watcher can now start — UUID and cwd are both known.
+			go s.jsonlWatchLoop()
 			// Rekey the manager's session map from the pending c3-id key
 			// to the canonical claudeUuid. Critical: once the c3 entry
 			// has a claudeUuid, handleSessionPTY resolves sessionKey to
@@ -800,6 +811,49 @@ func (m *Manager) discoveryLoop(s *Session, cwd string, before map[string]bool) 
 				hook(oldKey, x.UUID)
 			}
 			return
+		}
+	}
+}
+
+// jsonlWatchLoop polls the Claude JSONL transcript file for this session and
+// sends a {"type":"turn_complete"} control frame to the attached client
+// whenever the file grows. File growth means Claude finished writing a turn
+// (user + assistant entries are flushed to disk atomically at turn end).
+//
+// The loop stops when s.done closes (PTY exited). For shell sessions and
+// sessions without a known UUID, this method is never called.
+func (s *Session) jsonlWatchLoop() {
+	path, err := claudefs.JSONLPath(s.cwd, s.UUID)
+	if err != nil {
+		return
+	}
+	// Initialise from the current file size so a resumed session doesn't
+	// fire turn_complete immediately on startup.
+	var lastSize int64
+	if info, err2 := os.Stat(path); err2 == nil {
+		lastSize = info.Size()
+	}
+
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.done:
+			return
+		case <-ticker.C:
+		}
+		info, err2 := os.Stat(path)
+		if err2 != nil {
+			continue
+		}
+		if info.Size() > lastSize {
+			lastSize = info.Size()
+			s.mu.Lock()
+			c := s.client
+			s.mu.Unlock()
+			if c != nil {
+				_ = c.WriteControl(map[string]any{"type": "turn_complete"})
+			}
 		}
 	}
 }

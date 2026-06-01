@@ -153,6 +153,17 @@ func (r *Repo) Cwds() ([]string, error) {
 	return out, nil
 }
 
+// JSONLPath returns the absolute path to the JSONL transcript file for a
+// session identified by cwd + uuid. Returns an error only if UserHomeDir
+// fails. The file may not exist yet (new session).
+func JSONLPath(cwd, uuid string) (string, error) {
+	root, err := projectsRoot()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(root, encodeCWD(cwd), uuid+".jsonl"), nil
+}
+
 func projectsRoot() (string, error) {
 	if h := os.Getenv("CLAUDE_HOME"); h != "" {
 		return filepath.Join(h, "projects"), nil

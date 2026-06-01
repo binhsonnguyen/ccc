@@ -36,7 +36,8 @@ export type ControlMsg =
   | { type: 'exit'; code: number }
   | { type: 'error'; message?: string }
   | { type: 'pending' }
-  | { type: 'ready' };
+  | { type: 'ready' }
+  | { type: 'turn_complete' };
 
 // UI-side pane status. Drives the badge in the tab strip (derived from
 // primary pane) and the overlay shown over the terminal pane.
