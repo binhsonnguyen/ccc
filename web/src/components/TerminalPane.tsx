@@ -63,6 +63,11 @@ const IDLE_POLL_MS = 2000;
 // start producing bytes; if a *real* exit happens later it'll be well
 // outside the window.
 const EXIT_SUPPRESS_MS = 500;
+// How long PTY must be silent (on a non-visible pane) before we treat it
+// as "session waiting for input" and surface the attention badge. 4 s is
+// short enough to be timely but long enough to not fire mid-output during
+// a slow streaming response.
+const BELL_IDLE_MS = 4000;
 
 // Shell exit overlay copy. Go's exec.ExitError.ExitCode() returns -1 when
 // the process was killed by a signal (SIGKILL/SIGTERM etc.) on Unix —
@@ -174,7 +179,17 @@ export default function TerminalPane({
   const visibleRef = useRef(visible);
   useEffect(() => {
     visibleRef.current = visible;
+    // Cancel any pending idle-bell when this pane becomes visible — the
+    // user is already looking at it so the badge would be meaningless.
+    if (visible && bellTimerRef.current !== null) {
+      window.clearTimeout(bellTimerRef.current);
+      bellTimerRef.current = null;
+    }
   }, [visible]);
+  // Idle-bell timer: fires BELL_IDLE_MS after the last PTY byte on a
+  // non-visible pane. Claude Code doesn't emit BEL (\x07), so we use
+  // silence-after-activity as the "waiting for input" proxy.
+  const bellTimerRef = useRef<ReturnType<typeof window.setTimeout> | null>(null);
   // Decoder reused across frames — TextDecoder allocates a small
   // amount per construction, so we hoist it.
   const decoderRef = useRef<TextDecoder | null>(null);
@@ -282,6 +297,14 @@ export default function TerminalPane({
           } catch {
             /* malformed frame: don't break the terminal write path */
           }
+          // Idle-bell: restart the silence timer on every incoming PTY
+          // byte. When BELL_IDLE_MS of silence elapses the session has
+          // likely settled at a prompt waiting for the next user message.
+          if (bellTimerRef.current !== null) window.clearTimeout(bellTimerRef.current);
+          bellTimerRef.current = window.setTimeout(() => {
+            bellTimerRef.current = null;
+            if (!visibleRef.current) onBell?.(pane.c3Id);
+          }, BELL_IDLE_MS);
         }
       };
       ws.onclose = () => {
@@ -320,10 +343,6 @@ export default function TerminalPane({
       }
     });
 
-    const bellDisposable = entry.term.onBell(() => {
-      if (!visibleRef.current) onBell?.(pane.c3Id);
-    });
-
     const ro = new ResizeObserver(() => {
       if (entry.resizeTimer) window.clearTimeout(entry.resizeTimer);
       entry.resizeTimer = window.setTimeout(() => {
@@ -340,7 +359,10 @@ export default function TerminalPane({
     return () => {
       ro.disconnect();
       dataDisposable.dispose();
-      bellDisposable.dispose();
+      if (bellTimerRef.current !== null) {
+        window.clearTimeout(bellTimerRef.current);
+        bellTimerRef.current = null;
+      }
       const ws = entry.ws;
       if (ws && ws.readyState <= WebSocket.OPEN) {
         try {
