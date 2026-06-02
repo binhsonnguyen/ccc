@@ -1234,31 +1234,37 @@ export default function Sidebar({
                         </span>
                       )}
                       <span className="session-name-text">{s.name || s.id}</span>
-                      {pending && s.kind !== 'shell' && <span className="badge">pending</span>}
-                      {s.live && !pending && (
-                        <span className="badge badge-live" title="PTY live">
-                          live
-                        </span>
-                      )}
-                      {isOpen && !pending && (
-                        <span className="dot" aria-label="Open in tab" />
-                      )}
-                      {bellSet?.has(s.id) && (
+                      {/* Single priority-based status indicator — only one shows at a time.
+                          Priority: attention > exit > open > warm-background > pending */}
+                      {bellSet?.has(s.id) ? (
                         <span
                           className="sidebar-attn-dot"
                           aria-label="Waiting for input"
-                          title="Session is waiting for input"
+                          title="Waiting for input"
                         />
-                      )}
-                      {exitMap?.has(s.id) && (
+                      ) : exitMap?.has(s.id) ? (
                         <span
                           className={exitMap.get(s.id) === 0 ? 'sidebar-exit-ok' : 'sidebar-exit-err'}
-                          aria-label={`Exited with code ${exitMap.get(s.id)}`}
-                          title={`Exited with code ${exitMap.get(s.id)}`}
+                          aria-label={exitMap.get(s.id) === 0 ? 'Exited OK' : `Exited with error (code ${exitMap.get(s.id)})`}
+                          title={exitMap.get(s.id) === 0 ? 'Exited OK' : `Exited — code ${exitMap.get(s.id)}`}
                         >
                           {exitMap.get(s.id) === 0 ? '✓' : '✗'}
                         </span>
-                      )}
+                      ) : isOpen ? (
+                        <span className="dot" aria-label="Open in tab" />
+                      ) : s.live && !pending ? (
+                        <span
+                          className="sidebar-warm-dot"
+                          aria-label="Running in background"
+                          title="Claude is running in the background"
+                        />
+                      ) : pending ? (
+                        <span
+                          className="sidebar-pending-indicator"
+                          aria-label="Initializing"
+                          title="Session is initializing…"
+                        >…</span>
+                      ) : null}
                     </>
                   )}
                   <button

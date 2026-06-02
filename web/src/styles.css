@@ -565,6 +565,27 @@ code {
 .sidebar-exit-ok { color: #22c55e; }
 .sidebar-exit-err { color: #ef4444; }
 
+/* Warm-background indicator: PTY running but tab closed.
+   Hollow circle (outline only) — visually distinct from the filled blue dot. */
+.sidebar-warm-dot {
+  display: inline-block;
+  width: 6px; height: 6px; border-radius: 50%;
+  border: 1.5px solid var(--text-faint);
+  background: transparent;
+  margin-left: 4px;
+  flex-shrink: 0;
+}
+
+/* Pending indicator: session initialising, no UUID yet. */
+.sidebar-pending-indicator {
+  font-size: 10px;
+  color: var(--text-faint);
+  margin-left: 4px;
+  flex-shrink: 0;
+  letter-spacing: 1px;
+  line-height: 1;
+}
+
 /* ---- workspace --------------------------------------------------------- */
 
 .workspace {
@@ -1583,10 +1604,6 @@ code {
   min-width: 0;
 }
 
-.badge-live {
-  background: rgba(16,185,129,0.18);
-  color: var(--ok);
-}
 
 /* ---- row menu (D-3) --------------------------------------------------- */
 
