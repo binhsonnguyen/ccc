@@ -15,7 +15,7 @@ import {
 } from '../lib/api';
 import { useShortcut } from '../lib/shortcuts';
 import { cwdMonogram, cwdTint, cwdTintFg } from '../lib/cwdTint';
-import { useSidebarLayout } from '../lib/sidebarLayout';
+import { useSidebarLayout, type SidebarGroup } from '../lib/sidebarLayout';
 import type { C3Entry, Tab } from '../types';
 
 export type SidebarView = 'active' | 'archived';
@@ -164,6 +164,85 @@ function buckets_eq(
   return true;
 }
 
+// ---- Phase 2: render item types -----------------------------------------
+
+type RenderItem =
+  | { type: 'session'; session: C3Entry; inGroup: false }
+  | { type: 'session'; session: C3Entry; inGroup: true; groupId: string }
+  | { type: 'group'; group: SidebarGroup; members: C3Entry[] };
+
+// Build the mixed render list from layout + sessions.
+// 1. Walk layout.order: plain c3Id → ungrouped session, "grp:…" → group block.
+// 2. Append sessions not in any group and not in top-level order.
+function buildRenderItems(
+  layout: { order: string[]; groups: SidebarGroup[] },
+  sessions: C3Entry[],
+): RenderItem[] {
+  const byId = new Map(sessions.map((s) => [s.id, s]));
+  const groupById = new Map(layout.groups.map((g) => [g.id, g]));
+
+  // Set of all c3Ids inside any group.
+  const inAnyGroup = new Set<string>();
+  for (const g of layout.groups) {
+    for (const id of g.memberOrder) inAnyGroup.add(id);
+  }
+
+  const result: RenderItem[] = [];
+  const placed = new Set<string>(); // c3Ids placed (either ungrouped or in group)
+
+  for (const slot of layout.order) {
+    if (slot.startsWith('grp:')) {
+      const groupId = slot.slice(4);
+      const g = groupById.get(groupId);
+      if (!g) continue;
+      const members: C3Entry[] = [];
+      for (const mid of g.memberOrder) {
+        const s = byId.get(mid);
+        if (s) {
+          members.push(s);
+          placed.add(mid);
+        }
+      }
+      result.push({ type: 'group', group: g, members });
+    } else {
+      const s = byId.get(slot);
+      if (s && !inAnyGroup.has(slot)) {
+        result.push({ type: 'session', session: s, inGroup: false });
+        placed.add(slot);
+      }
+    }
+  }
+
+  // Append ungrouped sessions not yet placed (new sessions, not in order).
+  for (const s of sessions) {
+    if (!placed.has(s.id) && !inAnyGroup.has(s.id)) {
+      result.push({ type: 'session', session: s, inGroup: false });
+    }
+  }
+
+  // Expand group member items for groups that are not collapsed.
+  const final: RenderItem[] = [];
+  for (const item of result) {
+    if (item.type === 'group') {
+      final.push(item);
+      if (!item.group.collapsed) {
+        for (const s of item.members) {
+          final.push({ type: 'session', session: s, inGroup: true, groupId: item.group.id });
+        }
+      }
+    } else {
+      final.push(item);
+    }
+  }
+
+  return final;
+}
+
+// Generate a unique group ID (without the "grp:" prefix; caller adds it).
+function newGroupRawId(): string {
+  return Math.random().toString(36).slice(2, 10);
+}
+
 export default function Sidebar({
   sessions,
   activeC3Id,
@@ -202,8 +281,11 @@ export default function Sidebar({
   // Drag state for row reorder — stored in a ref so mousemove doesn't
   // trigger React re-renders. The indicator + ghost are DOM nodes managed
   // imperatively. dragVersion bumps to trigger repaint on commit/cancel.
+  // groupId: null = ungrouped row drag, string = within-group drag,
+  // '__group__' = dragging a group header.
   type DragState = {
     draggingId: string;
+    groupId: string | null; // null=ungrouped, '__group__'=group drag, else within-group
     ghostEl: HTMLDivElement;
     sourceIdx: number;
     dropIdx: number;
@@ -217,6 +299,190 @@ export default function Sidebar({
   const rowDragRef = useRef<DragState | null>(null);
   // Ref to the <ul> list so we can place the indicator inside it.
   const sessionListRef = useRef<HTMLUListElement | null>(null);
+
+  // ---- Phase 2 state ------------------------------------------------------
+
+  // Group rename
+  const [renamingGroupId, setRenamingGroupId] = useState<string | null>(null);
+  const [renameGroupDraft, setRenameGroupDraft] = useState('');
+
+  // Armed group delete (two-click confirm)
+  const [armedGroupId, setArmedGroupId] = useState<string | null>(null);
+  const armedTimerRef = useRef<number | null>(null);
+
+  // Move-to-group popover
+  interface MoveGroupPopover {
+    sessionId: string;
+    x: number;
+    y: number;
+  }
+  const [moveGroupPopover, setMoveGroupPopover] = useState<MoveGroupPopover | null>(null);
+
+  // ---- Phase 2: group helpers ---------------------------------------------
+
+  const findGroupOf = useCallback(
+    (c3Id: string): SidebarGroup | null => {
+      return layout.groups.find((g) => g.memberOrder.includes(c3Id)) ?? null;
+    },
+    [layout],
+  );
+
+  const moveToGroup = useCallback(
+    (c3Id: string, groupId: string) => {
+      const newLayout = { ...layout };
+      // Remove from top-level order if present.
+      newLayout.order = newLayout.order.filter((id) => id !== c3Id);
+      // Remove from any existing group.
+      newLayout.groups = newLayout.groups.map((g) => ({
+        ...g,
+        memberOrder: g.memberOrder.filter((id) => id !== c3Id),
+      }));
+      // Add to target group.
+      newLayout.groups = newLayout.groups.map((g) =>
+        g.id === groupId
+          ? { ...g, memberOrder: [...g.memberOrder, c3Id] }
+          : g,
+      );
+      setLayout(newLayout);
+    },
+    [layout, setLayout],
+  );
+
+  const removeFromGroup = useCallback(
+    (c3Id: string) => {
+      const newLayout = { ...layout };
+      // Remove from all groups.
+      newLayout.groups = newLayout.groups.map((g) => ({
+        ...g,
+        memberOrder: g.memberOrder.filter((id) => id !== c3Id),
+      }));
+      // Append to end of top-level order (if not already there).
+      if (!newLayout.order.includes(c3Id)) {
+        newLayout.order = [...newLayout.order, c3Id];
+      }
+      setLayout(newLayout);
+    },
+    [layout, setLayout],
+  );
+
+  const createGroup = useCallback(
+    (name: string, c3IdToAdd?: string) => {
+      const rawId = newGroupRawId();
+      const fullSlot = 'grp:' + rawId;
+      const newGroup: SidebarGroup = {
+        id: rawId,
+        name,
+        collapsed: false,
+        memberOrder: c3IdToAdd ? [c3IdToAdd] : [],
+      };
+      const newLayout = { ...layout };
+      // Remove session from top-level order and other groups if needed.
+      if (c3IdToAdd) {
+        newLayout.order = newLayout.order.filter((x) => x !== c3IdToAdd);
+        newLayout.groups = newLayout.groups.map((g) => ({
+          ...g,
+          memberOrder: g.memberOrder.filter((id2) => id2 !== c3IdToAdd),
+        }));
+      }
+      newLayout.groups = [...newLayout.groups, newGroup];
+      newLayout.order = [...newLayout.order, fullSlot];
+      setLayout(newLayout);
+    },
+    [layout, setLayout],
+  );
+
+  const toggleCollapse = useCallback(
+    (groupId: string) => {
+      setLayout({
+        ...layout,
+        groups: layout.groups.map((g) =>
+          g.id === groupId ? { ...g, collapsed: !g.collapsed } : g,
+        ),
+      });
+    },
+    [layout, setLayout],
+  );
+
+  const deleteGroup = useCallback(
+    (groupId: string) => {
+      const g = layout.groups.find((x) => x.id === groupId);
+      if (!g) return;
+      const newLayout = { ...layout };
+      // Remove group from groups list.
+      newLayout.groups = newLayout.groups.filter((x) => x.id !== groupId);
+      // Remove group slot from order.
+      newLayout.order = newLayout.order.filter((x) => x !== 'grp:' + groupId);
+      // Members fall back to ungrouped — append at end (without duplicating).
+      const toAppend = g.memberOrder.filter((id) => !newLayout.order.includes(id));
+      newLayout.order = [...newLayout.order, ...toAppend];
+      setLayout(newLayout);
+    },
+    [layout, setLayout],
+  );
+
+  // Auto-increment group name: "Group 1", "Group 2", …
+  const nextGroupName = useCallback(() => {
+    const existing = layout.groups.map((g) => g.name);
+    let n = 1;
+    while (existing.includes(`Group ${n}`)) n++;
+    return `Group ${n}`;
+  }, [layout]);
+
+  // Arm delete: first click arms, second click confirms.
+  const triggerGroupDelete = useCallback(
+    (groupId: string) => {
+      if (armedGroupId === groupId) {
+        // Second click: confirm delete.
+        if (armedTimerRef.current !== null) {
+          window.clearTimeout(armedTimerRef.current);
+          armedTimerRef.current = null;
+        }
+        setArmedGroupId(null);
+        deleteGroup(groupId);
+      } else {
+        // First click: arm.
+        if (armedTimerRef.current !== null) {
+          window.clearTimeout(armedTimerRef.current);
+        }
+        setArmedGroupId(groupId);
+        armedTimerRef.current = window.setTimeout(() => {
+          setArmedGroupId(null);
+          armedTimerRef.current = null;
+        }, 2000);
+      }
+    },
+    [armedGroupId, deleteGroup],
+  );
+
+  // Cleanup arm timer on unmount.
+  useEffect(() => {
+    return () => {
+      if (armedTimerRef.current !== null) window.clearTimeout(armedTimerRef.current);
+    };
+  }, []);
+
+  const startGroupRename = useCallback(
+    (groupId: string) => {
+      const g = layout.groups.find((x) => x.id === groupId);
+      if (!g) return;
+      setRenamingGroupId(groupId);
+      setRenameGroupDraft(g.name);
+    },
+    [layout],
+  );
+
+  const commitGroupRename = useCallback(() => {
+    const name = renameGroupDraft.trim();
+    setRenamingGroupId(null);
+    if (!name || !renamingGroupId) return;
+    const gid = renamingGroupId;
+    setLayout({
+      ...layout,
+      groups: layout.groups.map((g) =>
+        g.id === gid ? { ...g, name } : g,
+      ),
+    });
+  }, [layout, renamingGroupId, renameGroupDraft, setLayout]);
 
   const onResizerMouseDown = (e: React.MouseEvent) => {
     if (!resizable) return;
@@ -537,7 +803,7 @@ export default function Sidebar({
             await removeSession(s.id, true);
             showToast(`Removed ${s.name || s.id} (force)`, { variant: 'warning' });
             // Close any open pane attached to this session's c3Id.
-        onCloseTabFor(s.id);
+            onCloseTabFor(s.id);
             onAfterMutate();
             return;
           } catch (err2) {
@@ -587,6 +853,7 @@ export default function Sidebar({
       const isOpen = openSet.has(s.id);
       const pending = !s.claudeUuid && s.kind !== 'shell';
       const archived = view === 'archived';
+      const currentGroup = findGroupOf(s.id);
       return [
         {
           id: 'open',
@@ -624,6 +891,27 @@ export default function Sidebar({
           onClick: () => void doRemove(s),
         },
         { id: 'sep1', label: '', separator: true },
+        // Phase 2: group membership
+        ...(currentGroup
+          ? [{
+              id: 'ungroup' as const,
+              label: 'Remove from group',
+              onClick: () => removeFromGroup(s.id),
+            }]
+          : [{
+              id: 'move-group' as const,
+              label: 'Move to group…',
+              onClick: (_e?: React.MouseEvent) => {
+                const el = rowRefs.current.get(s.id);
+                const rect = el?.getBoundingClientRect();
+                setMoveGroupPopover({
+                  sessionId: s.id,
+                  x: rect ? rect.right + 4 : 200,
+                  y: rect ? rect.top : 200,
+                });
+              },
+            }]),
+        { id: 'sep2', label: '', separator: true },
         // Copy uuid is hidden (not disabled) for shell rows — shell tabs
         // never have a Claude uuid by design, so there's no future state
         // where the item works. Disabled-vs-hide: disable is right for
@@ -652,9 +940,11 @@ export default function Sidebar({
     [
       doArchive,
       doRemove,
+      findGroupOf,
       onOpen,
       onSessionSelected,
       openSet,
+      removeFromGroup,
       startRename,
       view,
     ],
@@ -706,6 +996,15 @@ export default function Sidebar({
     if (!rid) return null;
     return sessions?.find((s) => s.id === rid) ?? null;
   };
+
+  // Group header focused helper.
+  const focusedGroupId = (): string | null => {
+    const el = document.activeElement;
+    if (!el) return null;
+    const li = el.closest<HTMLElement>('li.session-group-header[data-group-id]');
+    return li?.dataset.groupId ?? null;
+  };
+
   const rowWhen = () => focusedRowEntry() !== null && !renamingId;
   useShortcut(
     {
@@ -770,6 +1069,81 @@ export default function Sidebar({
       },
     },
     [sessions, renamingId],
+  );
+
+  // Group header keyboard shortcuts (Space/Enter = toggle, →/← = expand/collapse)
+  const groupHeaderWhen = () => focusedGroupId() !== null;
+  useShortcut(
+    {
+      id: 'sidebar.group.toggle',
+      keys: ' ',
+      scope: 'sidebar-focused',
+      label: 'Toggle group collapse',
+      when: groupHeaderWhen,
+      handler: () => {
+        const gid = focusedGroupId();
+        if (gid) toggleCollapse(gid);
+      },
+    },
+    [layout, toggleCollapse],
+  );
+  useShortcut(
+    {
+      id: 'sidebar.group.enter',
+      keys: 'Enter',
+      scope: 'sidebar-focused',
+      label: 'Toggle group collapse',
+      when: groupHeaderWhen,
+      handler: () => {
+        const gid = focusedGroupId();
+        if (gid) toggleCollapse(gid);
+      },
+    },
+    [layout, toggleCollapse],
+  );
+  useShortcut(
+    {
+      id: 'sidebar.group.expand',
+      keys: 'ArrowRight',
+      scope: 'sidebar-focused',
+      label: 'Expand group',
+      when: () => {
+        const gid = focusedGroupId();
+        if (!gid) return false;
+        const g = layout.groups.find((x) => x.id === gid);
+        return !!g?.collapsed;
+      },
+      handler: () => {
+        const gid = focusedGroupId();
+        if (gid) {
+          const g = layout.groups.find((x) => x.id === gid);
+          if (g?.collapsed) toggleCollapse(gid);
+        }
+      },
+    },
+    [layout, toggleCollapse],
+  );
+  useShortcut(
+    {
+      id: 'sidebar.group.collapse',
+      keys: 'ArrowLeft',
+      scope: 'sidebar-focused',
+      label: 'Collapse group',
+      when: () => {
+        const gid = focusedGroupId();
+        if (!gid) return false;
+        const g = layout.groups.find((x) => x.id === gid);
+        return g ? !g.collapsed : false;
+      },
+      handler: () => {
+        const gid = focusedGroupId();
+        if (gid) {
+          const g = layout.groups.find((x) => x.id === gid);
+          if (g && !g.collapsed) toggleCollapse(gid);
+        }
+      },
+    },
+    [layout, toggleCollapse],
   );
 
   const onMenuClose = useCallback(() => {
@@ -852,6 +1226,12 @@ export default function Sidebar({
 
   const orderedSessions: C3Entry[] | null =
     !q && visibleSessions ? applyOrder(visibleSessions, layout.order) : visibleSessions;
+
+  // Build render items (only when filter is off).
+  const renderItems: RenderItem[] | null =
+    !q && visibleSessions
+      ? buildRenderItems(layout, visibleSessions)
+      : null;
 
   // Deep-search trigger. Runs when q has ≥3 chars AND (no name matches
   // OR the user explicitly asked). Debounced 250ms — each keystroke
@@ -936,26 +1316,67 @@ export default function Sidebar({
 
   const commitDrag = useCallback(() => {
     const d = rowDragRef.current;
-    if (!d || !orderedSessions) { cancelDrag(); return; }
-    const ids = orderedSessions.map((s) => s.id);
-    // Remove source, insert at drop position.
-    ids.splice(d.sourceIdx, 1);
-    const insertAt = d.dropIdx > d.sourceIdx ? d.dropIdx - 1 : d.dropIdx;
-    ids.splice(insertAt, 0, d.draggingId);
-    setLayout({ ...layout, order: ids });
+    if (!d) { cancelDrag(); return; }
+
+    if (d.groupId === '__group__') {
+      // Reorder group headers within top-level order.
+      const slots = [...layout.order];
+      const slot = 'grp:' + d.draggingId;
+      // Rebuild: extract group slots, reorder, stitch back.
+      const groupSlots = slots.filter((s) => s.startsWith('grp:'));
+      const srcIdx = groupSlots.indexOf(slot);
+      if (srcIdx !== -1) {
+        groupSlots.splice(srcIdx, 1);
+        const insertAt = d.dropIdx > d.sourceIdx ? d.dropIdx - 1 : d.dropIdx;
+        groupSlots.splice(Math.max(0, insertAt), 0, slot);
+        let gi = 0;
+        const newOrder = slots.map((s) => (s.startsWith('grp:') ? groupSlots[gi++] : s));
+        setLayout({ ...layout, order: newOrder });
+      }
+    } else if (d.groupId !== null) {
+      // Reorder within a group's memberOrder.
+      const g = layout.groups.find((x) => x.id === d.groupId);
+      if (g) {
+        const ids = [...g.memberOrder];
+        ids.splice(d.sourceIdx, 1);
+        const insertAt = d.dropIdx > d.sourceIdx ? d.dropIdx - 1 : d.dropIdx;
+        ids.splice(Math.max(0, insertAt), 0, d.draggingId);
+        setLayout({
+          ...layout,
+          groups: layout.groups.map((x) =>
+            x.id === d.groupId ? { ...x, memberOrder: ids } : x,
+          ),
+        });
+      }
+    } else {
+      // Reorder ungrouped sessions in top-level order.
+      if (!orderedSessions) { cancelDrag(); return; }
+      const ids = orderedSessions.map((s) => s.id);
+      ids.splice(d.sourceIdx, 1);
+      const insertAt = d.dropIdx > d.sourceIdx ? d.dropIdx - 1 : d.dropIdx;
+      ids.splice(Math.max(0, insertAt), 0, d.draggingId);
+      setLayout({ ...layout, order: ids });
+    }
+
     cancelDrag();
   }, [cancelDrag, layout, orderedSessions, setLayout]);
 
   const startDrag = useCallback(
-    (e: React.MouseEvent, c3Id: string) => {
-      if (!orderedSessions) return;
+    (e: React.MouseEvent, c3Id: string, groupId: string | null) => {
+      if (groupId === null && !orderedSessions) return;
       e.preventDefault();
 
       const handleEl = e.currentTarget as HTMLElement;
       const li = handleEl.closest('li') as HTMLLIElement | null;
       if (!li) return;
 
-      const sourceIdx = orderedSessions.findIndex((s) => s.id === c3Id);
+      let sourceIdx: number;
+      if (groupId === null) {
+        sourceIdx = orderedSessions!.findIndex((s) => s.id === c3Id);
+      } else {
+        const g = layout.groups.find((x) => x.id === groupId);
+        sourceIdx = g ? g.memberOrder.indexOf(c3Id) : -1;
+      }
       if (sourceIdx === -1) return;
 
       const rect = li.getBoundingClientRect();
@@ -987,10 +1408,16 @@ export default function Sidebar({
       document.body.style.cursor = 'grabbing';
 
       // Compute dropIdx from cursor Y vs. row midpoints.
+      // Only considers rows in the same "scope" (ungrouped or within group).
       const calcDropIdx = (clientY: number): number => {
         const list = sessionListRef.current;
         if (!list) return sourceIdx;
-        const rows = Array.from(list.querySelectorAll<HTMLElement>('li.session'));
+        let rows: HTMLElement[];
+        if (groupId === null) {
+          rows = Array.from(list.querySelectorAll<HTMLElement>('li.session:not(.session-in-group)'));
+        } else {
+          rows = Array.from(list.querySelectorAll<HTMLElement>(`li.session[data-group-id="${groupId}"]`));
+        }
         for (let i = 0; i < rows.length; i++) {
           const r = rows[i].getBoundingClientRect();
           if (clientY < r.top + r.height / 2) return i;
@@ -1002,7 +1429,12 @@ export default function Sidebar({
       const placeIndicator = (dropIdx: number) => {
         const list = sessionListRef.current;
         if (!list) return;
-        const rows = Array.from(list.querySelectorAll<HTMLElement>('li.session'));
+        let rows: HTMLElement[];
+        if (groupId === null) {
+          rows = Array.from(list.querySelectorAll<HTMLElement>('li.session:not(.session-in-group)'));
+        } else {
+          rows = Array.from(list.querySelectorAll<HTMLElement>(`li.session[data-group-id="${groupId}"]`));
+        }
         if (rows.length === 0) return;
         indicator.style.display = 'block';
         if (dropIdx < rows.length) {
@@ -1034,6 +1466,7 @@ export default function Sidebar({
 
       rowDragRef.current = {
         draggingId: c3Id,
+        groupId,
         ghostEl: ghost,
         sourceIdx,
         dropIdx: sourceIdx,
@@ -1051,7 +1484,110 @@ export default function Sidebar({
       window.addEventListener('keydown', actualKeyHandler);
       setDragVersion((v) => v + 1);
     },
-    [cancelDrag, commitDrag, orderedSessions],
+    [cancelDrag, commitDrag, layout.groups, orderedSessions],
+  );
+
+  // Drag for group headers (reorder groups in top-level order).
+  const startGroupDrag = useCallback(
+    (e: React.MouseEvent, groupId: string) => {
+      e.preventDefault();
+
+      const handleEl = e.currentTarget as HTMLElement;
+      const li = handleEl.closest('li') as HTMLLIElement | null;
+      if (!li) return;
+
+      // sourceIdx = position among group headers in order.
+      const groupSlots = layout.order.filter((s) => s.startsWith('grp:'));
+      const sourceIdx = groupSlots.indexOf('grp:' + groupId);
+      if (sourceIdx === -1) return;
+
+      const rect = li.getBoundingClientRect();
+      const offsetX = e.clientX - rect.left;
+      const offsetY = e.clientY - rect.top;
+
+      const ghost = document.createElement('div');
+      ghost.style.cssText = [
+        'position:fixed',
+        `left:${rect.left}px`,
+        `top:${rect.top}px`,
+        `width:${rect.width}px`,
+        'pointer-events:none',
+        'opacity:0.55',
+        'box-shadow:0 4px 16px rgba(0,0,0,0.4)',
+        'z-index:1000',
+        'background:var(--sidebar-bg)',
+        'border-radius:2px',
+      ].join(';');
+      ghost.innerHTML = li.outerHTML;
+      document.body.appendChild(ghost);
+
+      const indicator = document.createElement('div');
+      indicator.className = 'sidebar-drop-indicator';
+      sessionListRef.current?.appendChild(indicator);
+
+      document.body.style.cursor = 'grabbing';
+
+      const calcDropIdx = (clientY: number): number => {
+        const list = sessionListRef.current;
+        if (!list) return sourceIdx;
+        const headers = Array.from(list.querySelectorAll<HTMLElement>('li.session-group-header'));
+        for (let i = 0; i < headers.length; i++) {
+          const r = headers[i].getBoundingClientRect();
+          if (clientY < r.top + r.height / 2) return i;
+        }
+        return headers.length;
+      };
+
+      const placeIndicator = (dropIdx: number) => {
+        const list = sessionListRef.current;
+        if (!list) return;
+        const headers = Array.from(list.querySelectorAll<HTMLElement>('li.session-group-header'));
+        if (headers.length === 0) return;
+        indicator.style.display = 'block';
+        if (dropIdx < headers.length) {
+          list.insertBefore(indicator, headers[dropIdx]);
+        } else {
+          list.appendChild(indicator);
+        }
+      };
+
+      const actualMoveHandler = (ev: MouseEvent) => {
+        const d = rowDragRef.current;
+        if (!d) return;
+        d.ghostEl.style.left = `${ev.clientX - d.offsetX}px`;
+        d.ghostEl.style.top = `${ev.clientY - d.offsetY}px`;
+        const newDropIdx = calcDropIdx(ev.clientY);
+        if (newDropIdx !== d.dropIdx) {
+          d.dropIdx = newDropIdx;
+          placeIndicator(newDropIdx);
+        }
+      };
+      const actualUpHandler = () => commitDrag();
+      const actualKeyHandler = (ev: KeyboardEvent) => {
+        if (ev.key === 'Escape') cancelDrag();
+      };
+
+      rowDragRef.current = {
+        draggingId: groupId,
+        groupId: '__group__',
+        ghostEl: ghost,
+        sourceIdx,
+        dropIdx: sourceIdx,
+        indicatorEl: indicator,
+        offsetX,
+        offsetY,
+        onMove: actualMoveHandler,
+        onUp: actualUpHandler,
+        onKey: actualKeyHandler,
+      };
+
+      placeIndicator(sourceIdx);
+      window.addEventListener('mousemove', actualMoveHandler);
+      window.addEventListener('mouseup', actualUpHandler);
+      window.addEventListener('keydown', actualKeyHandler);
+      setDragVersion((v) => v + 1);
+    },
+    [cancelDrag, commitDrag, layout.order],
   );
 
   // Suppress dragVersion from "unused variable" — its purpose is purely
@@ -1113,6 +1649,304 @@ export default function Sidebar({
   // Inline width override only in wide mode — narrow / drawer keeps the
   // fixed 280px from CSS so the slide-in math doesn't depend on a JS var.
   const asideStyle = resizable ? { width: `${width}px`, flexBasis: `${width}px` } : undefined;
+
+  // ---- session row renderer (shared between ungrouped + in-group) ---------
+
+  const renderSessionRow = (s: C3Entry, inGroup: boolean, groupId?: string) => {
+    // Shell entries are NOT "pending" — they have no claudeUuid by
+    // design and their PTY spawns immediately on attach. Without
+    // this guard the row picks up the pending CSS hue and the
+    // ARIA label says "click to start" (wrong for shell tabs).
+    const pending = !s.claudeUuid && s.kind !== 'shell';
+    // Each pane is uniquely identified by its c3Id; activeC3Id is
+    // the focused pane's c3Id, openSet contains every attached pane.
+    const isActive = !pending && s.id === activeC3Id;
+    const isOpen = !pending && openSet.has(s.id);
+    const openTabIdx = openByC3.get(s.id);
+    const isDraggingThis = rowDragRef.current?.draggingId === s.id;
+    const className =
+      'session' +
+      (isActive ? ' active' : '') +
+      (pending ? ' pending' : '') +
+      (isOpen && !isActive ? ' open' : '') +
+      (isDraggingThis ? ' dragging-source' : '') +
+      (inGroup ? ' session-in-group' : '');
+    const cwdLabel = s.cwd || '';
+    const isRenaming = renamingId === s.id;
+    // C-3: hue derives from cwd so multiple sessions on the same
+    // project share an accent, but different projects pop apart.
+    // Inline as a CSS custom property — CSS owns the actual usage
+    // (border-left strip, hover glow, monogram chip).
+    const rowTint = cwdTint(s.cwd || '');
+    const rowTintFg = cwdTintFg(s.cwd || '');
+    const monogram = cwdMonogram(s.cwd || '');
+    const rowStyle = {
+      '--row-tint': rowTint,
+      '--row-tint-fg': rowTintFg,
+    } as React.CSSProperties;
+
+    // Enter (button activation) and the ContextMenu key stay
+    // local — they're row semantics, not app-level shortcuts.
+    // r / a / Delete / Backspace live in the shortcut registry
+    // above (scope 'sidebar-focused').
+    const onRowKey = (e: React.KeyboardEvent<HTMLLIElement>) => {
+      if (isRenaming) return;
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        // Pending entries open too: server spawns claude no-resume
+        // (D-7) and sends {type:'pending'} → {type:'ready'} frames
+        // for the banner/disableStdin handling.
+        onOpen(s);
+        onSessionSelected?.();
+      } else if (e.key === 'ContextMenu') {
+        e.preventDefault();
+        const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+        setMenu({ rowId: s.id, x: rect.right - 200, y: rect.bottom });
+      }
+    };
+
+    return (
+      <li
+        key={s.id}
+        ref={(el) => {
+          rowRefs.current.set(s.id, el);
+        }}
+        data-row-id={s.id}
+        data-group-id={groupId}
+        className={className}
+        style={rowStyle}
+        onClick={() => {
+          if (isRenaming) return;
+          closePreview();
+          onOpen(s);
+          onSessionSelected?.();
+        }}
+        onKeyDown={onRowKey}
+        onMouseEnter={(e) => onRowMouseEnter(s, e.currentTarget)}
+        onMouseLeave={onRowMouseLeave}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          closePreview();
+          setMenu({ rowId: s.id, x: e.clientX, y: e.clientY });
+        }}
+        tabIndex={0}
+        role="button"
+        aria-current={isActive ? 'true' : undefined}
+        aria-label={
+          pending
+            ? `${s.name || s.id} (pending session — click to start)`
+            : undefined
+        }
+        title={
+          isOpen && openTabIdx !== undefined
+            ? `Already open in tab ${openTabIdx + 1}${cwdLabel ? ` — ${cwdLabel}` : ''}`
+            : cwdLabel
+        }
+      >
+        <div className="session-name">
+          {!q && (
+            <span
+              className="sidebar-drag-handle"
+              aria-label="Drag to reorder"
+              title="Drag to reorder"
+              onMouseDown={(e) => startDrag(e, s.id, groupId ?? null)}
+              onClick={(e) => e.stopPropagation()}
+            >
+              ⠿
+            </span>
+          )}
+          <span
+            className="session-monogram"
+            aria-hidden="true"
+            title={cwdLabel || undefined}
+          >
+            {monogram}
+          </span>
+          {!pending && s.live && (
+            <Sparkline
+              buckets={activity.get(s.id) ?? null}
+              // On the active row the background is also the
+              // tint, so painting bars in the same hue makes
+              // them disappear. Use the lighter "fg" variant
+              // there for contrast.
+              color={isActive ? rowTintFg : rowTint}
+            />
+          )}
+          {isRenaming ? (
+            <input
+              type="text"
+              autoFocus
+              className="rename-input"
+              value={renameDraft}
+              maxLength={80}
+              onChange={(e) => setRenameDraft(e.target.value)}
+              onBlur={() => void commitRename(s)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  void commitRename(s);
+                } else if (e.key === 'Escape') {
+                  e.preventDefault();
+                  renameCancelledRef.current = true;
+                  setRenamingId(null);
+                }
+                e.stopPropagation();
+              }}
+              onClick={(e) => e.stopPropagation()}
+            />
+          ) : (
+            <>
+              {s.kind === 'shell' && (
+                <span
+                  className="badge sidebar-row-kind-badge"
+                  title="Plain shell tab"
+                >
+                  sh
+                </span>
+              )}
+              <span className="session-name-text">{s.name || s.id}</span>
+              {/* Single priority-based status indicator — only one shows at a time.
+                  Priority: attention > exit > open > warm-background > pending */}
+              {bellSet?.has(s.id) ? (
+                <span
+                  className="sidebar-attn-dot"
+                  aria-label="Waiting for input"
+                  title="Waiting for input"
+                />
+              ) : exitMap?.has(s.id) ? (
+                <span
+                  className={exitMap.get(s.id) === 0 ? 'sidebar-exit-ok' : 'sidebar-exit-err'}
+                  aria-label={exitMap.get(s.id) === 0 ? 'Exited OK' : `Exited with error (code ${exitMap.get(s.id)})`}
+                  title={exitMap.get(s.id) === 0 ? 'Exited OK' : `Exited — code ${exitMap.get(s.id)}`}
+                >
+                  {exitMap.get(s.id) === 0 ? '✓' : '✗'}
+                </span>
+              ) : isOpen ? (
+                <span className="dot" aria-label="Open in tab" />
+              ) : s.live && !pending ? (
+                <span
+                  className="sidebar-warm-dot"
+                  aria-label="Running in background"
+                  title="Claude is running in the background"
+                />
+              ) : pending ? (
+                <span
+                  className="sidebar-pending-indicator"
+                  aria-label="Initializing"
+                  title="Session is initializing…"
+                >…</span>
+              ) : null}
+            </>
+          )}
+          <button
+            type="button"
+            className="session-menu-btn"
+            aria-label="Row actions"
+            tabIndex={-1}
+            onClick={(e) => {
+              e.stopPropagation();
+              const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+              setMenu({ rowId: s.id, x: rect.left, y: rect.bottom });
+            }}
+          >
+            ⋯
+          </button>
+        </div>
+        <div className="session-cwd">{cwdLabel}</div>
+        {!pending && <div className="session-uuid">{s.claudeUuid.slice(0, 8)}</div>}
+      </li>
+    );
+  };
+
+  // ---- group header renderer ---------------------------------------------
+
+  const renderGroupHeader = (g: SidebarGroup, memberCount: number) => {
+    const isRenaming = renamingGroupId === g.id;
+    const isArmed = armedGroupId === g.id;
+    const isDraggingThis =
+      rowDragRef.current?.groupId === '__group__' &&
+      rowDragRef.current?.draggingId === g.id;
+
+    return (
+      <li
+        key={`group-${g.id}`}
+        data-group-id={g.id}
+        className={'session-group-header' + (isDraggingThis ? ' dragging-source' : '')}
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === ' ' || e.key === 'Enter') {
+            e.preventDefault();
+            toggleCollapse(g.id);
+          }
+        }}
+      >
+        {!q && (
+          <span
+            className="group-drag-handle"
+            aria-label="Drag group to reorder"
+            title="Drag to reorder group"
+            onMouseDown={(e) => startGroupDrag(e, g.id)}
+            onClick={(e) => e.stopPropagation()}
+          >
+            ⠿
+          </span>
+        )}
+        <button
+          className="group-chevron"
+          onClick={() => toggleCollapse(g.id)}
+          aria-label={g.collapsed ? 'Expand group' : 'Collapse group'}
+          tabIndex={-1}
+        >
+          {g.collapsed ? '▸' : '▾'}
+        </button>
+        {isRenaming ? (
+          <input
+            className="group-rename-input"
+            type="text"
+            autoFocus
+            value={renameGroupDraft}
+            maxLength={60}
+            onChange={(e) => setRenameGroupDraft(e.target.value)}
+            onBlur={commitGroupRename}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                commitGroupRename();
+              } else if (e.key === 'Escape') {
+                e.preventDefault();
+                setRenamingGroupId(null);
+              }
+              e.stopPropagation();
+            }}
+            onClick={(e) => e.stopPropagation()}
+          />
+        ) : (
+          <span
+            className="group-name"
+            onDoubleClick={() => startGroupRename(g.id)}
+            title="Double-click to rename"
+          >
+            {g.name}
+          </span>
+        )}
+        {g.collapsed && memberCount > 0 && (
+          <span className="group-count">({memberCount})</span>
+        )}
+        <button
+          className={'group-delete-btn' + (isArmed ? ' armed' : '')}
+          onClick={(e) => {
+            e.stopPropagation();
+            triggerGroupDelete(g.id);
+          }}
+          aria-label={isArmed ? 'Confirm delete group' : 'Delete group'}
+          title={isArmed ? 'Click again to confirm delete' : 'Delete group (sessions become ungrouped)'}
+          tabIndex={-1}
+        >
+          {isArmed ? '✓?' : '×'}
+        </button>
+      </li>
+    );
+  };
 
   return (
     <aside
@@ -1344,209 +2178,21 @@ export default function Sidebar({
         </div>
       ) : (
         <ul className="session-list" ref={sessionListRef}>
-          {(orderedSessions ?? []).map((s) => {
-            // Shell entries are NOT "pending" — they have no claudeUuid by
-            // design and their PTY spawns immediately on attach. Without
-            // this guard the row picks up the pending CSS hue and the
-            // ARIA label says "click to start" (wrong for shell tabs).
-            const pending = !s.claudeUuid && s.kind !== 'shell';
-            // Each pane is uniquely identified by its c3Id; activeC3Id is
-            // the focused pane's c3Id, openSet contains every attached pane.
-            const isActive = !pending && s.id === activeC3Id;
-            const isOpen = !pending && openSet.has(s.id);
-            const openTabIdx = openByC3.get(s.id);
-            const isDraggingThis = rowDragRef.current?.draggingId === s.id;
-            const className =
-              'session' +
-              (isActive ? ' active' : '') +
-              (pending ? ' pending' : '') +
-              (isOpen && !isActive ? ' open' : '') +
-              (isDraggingThis ? ' dragging-source' : '');
-            const cwdLabel = s.cwd || '';
-            const isRenaming = renamingId === s.id;
-            // C-3: hue derives from cwd so multiple sessions on the same
-            // project share an accent, but different projects pop apart.
-            // Inline as a CSS custom property — CSS owns the actual usage
-            // (border-left strip, hover glow, monogram chip).
-            const rowTint = cwdTint(s.cwd || '');
-            const rowTintFg = cwdTintFg(s.cwd || '');
-            const monogram = cwdMonogram(s.cwd || '');
-            const rowStyle = {
-              '--row-tint': rowTint,
-              '--row-tint-fg': rowTintFg,
-            } as React.CSSProperties;
-
-            // Enter (button activation) and the ContextMenu key stay
-            // local — they're row semantics, not app-level shortcuts.
-            // r / a / Delete / Backspace live in the shortcut registry
-            // above (scope 'sidebar-focused').
-            const onRowKey = (e: React.KeyboardEvent<HTMLLIElement>) => {
-              if (isRenaming) return;
-              if (e.key === 'Enter') {
-                e.preventDefault();
-                // Pending entries open too: server spawns claude no-resume
-                // (D-7) and sends {type:'pending'} → {type:'ready'} frames
-                // for the banner/disableStdin handling.
-                onOpen(s);
-                onSessionSelected?.();
-              } else if (e.key === 'ContextMenu') {
-                e.preventDefault();
-                const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                setMenu({ rowId: s.id, x: rect.right - 200, y: rect.bottom });
-              }
-            };
-
-            return (
-              <li
-                key={s.id}
-                ref={(el) => {
-                  rowRefs.current.set(s.id, el);
-                }}
-                data-row-id={s.id}
-                className={className}
-                style={rowStyle}
-                onClick={() => {
-                  if (isRenaming) return;
-                  closePreview();
-                  onOpen(s);
-                  onSessionSelected?.();
-                }}
-                onKeyDown={onRowKey}
-                onMouseEnter={(e) => onRowMouseEnter(s, e.currentTarget)}
-                onMouseLeave={onRowMouseLeave}
-                onContextMenu={(e) => {
-                  e.preventDefault();
-                  closePreview();
-                  setMenu({ rowId: s.id, x: e.clientX, y: e.clientY });
-                }}
-                tabIndex={0}
-                role="button"
-                aria-current={isActive ? 'true' : undefined}
-                aria-label={
-                  pending
-                    ? `${s.name || s.id} (pending session — click to start)`
-                    : undefined
+          {q
+            ? // Filter active: flat list, no groups
+              (orderedSessions ?? []).map((s) => renderSessionRow(s, false))
+            : // No filter: render mixed items (groups + ungrouped)
+              (renderItems ?? []).map((item) => {
+                if (item.type === 'group') {
+                  return renderGroupHeader(item.group, item.members.length);
                 }
-                title={
-                  isOpen && openTabIdx !== undefined
-                    ? `Already open in tab ${openTabIdx + 1}${cwdLabel ? ` — ${cwdLabel}` : ''}`
-                    : cwdLabel
-                }
-              >
-                <div className="session-name">
-                  {!q && (
-                    <span
-                      className="sidebar-drag-handle"
-                      aria-label="Drag to reorder"
-                      title="Drag to reorder"
-                      onMouseDown={(e) => startDrag(e, s.id)}
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      ⠿
-                    </span>
-                  )}
-                  <span
-                    className="session-monogram"
-                    aria-hidden="true"
-                    title={cwdLabel || undefined}
-                  >
-                    {monogram}
-                  </span>
-                  {!pending && s.live && (
-                    <Sparkline
-                      buckets={activity.get(s.id) ?? null}
-                      // On the active row the background is also the
-                      // tint, so painting bars in the same hue makes
-                      // them disappear. Use the lighter "fg" variant
-                      // there for contrast.
-                      color={isActive ? rowTintFg : rowTint}
-                    />
-                  )}
-                  {isRenaming ? (
-                    <input
-                      type="text"
-                      autoFocus
-                      className="rename-input"
-                      value={renameDraft}
-                      maxLength={80}
-                      onChange={(e) => setRenameDraft(e.target.value)}
-                      onBlur={() => void commitRename(s)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          e.preventDefault();
-                          void commitRename(s);
-                        } else if (e.key === 'Escape') {
-                          e.preventDefault();
-                          renameCancelledRef.current = true;
-                          setRenamingId(null);
-                        }
-                        e.stopPropagation();
-                      }}
-                      onClick={(e) => e.stopPropagation()}
-                    />
-                  ) : (
-                    <>
-                      {s.kind === 'shell' && (
-                        <span
-                          className="badge sidebar-row-kind-badge"
-                          title="Plain shell tab"
-                        >
-                          sh
-                        </span>
-                      )}
-                      <span className="session-name-text">{s.name || s.id}</span>
-                      {/* Single priority-based status indicator — only one shows at a time.
-                          Priority: attention > exit > open > warm-background > pending */}
-                      {bellSet?.has(s.id) ? (
-                        <span
-                          className="sidebar-attn-dot"
-                          aria-label="Waiting for input"
-                          title="Waiting for input"
-                        />
-                      ) : exitMap?.has(s.id) ? (
-                        <span
-                          className={exitMap.get(s.id) === 0 ? 'sidebar-exit-ok' : 'sidebar-exit-err'}
-                          aria-label={exitMap.get(s.id) === 0 ? 'Exited OK' : `Exited with error (code ${exitMap.get(s.id)})`}
-                          title={exitMap.get(s.id) === 0 ? 'Exited OK' : `Exited — code ${exitMap.get(s.id)}`}
-                        >
-                          {exitMap.get(s.id) === 0 ? '✓' : '✗'}
-                        </span>
-                      ) : isOpen ? (
-                        <span className="dot" aria-label="Open in tab" />
-                      ) : s.live && !pending ? (
-                        <span
-                          className="sidebar-warm-dot"
-                          aria-label="Running in background"
-                          title="Claude is running in the background"
-                        />
-                      ) : pending ? (
-                        <span
-                          className="sidebar-pending-indicator"
-                          aria-label="Initializing"
-                          title="Session is initializing…"
-                        >…</span>
-                      ) : null}
-                    </>
-                  )}
-                  <button
-                    type="button"
-                    className="session-menu-btn"
-                    aria-label="Row actions"
-                    tabIndex={-1}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                      setMenu({ rowId: s.id, x: rect.left, y: rect.bottom });
-                    }}
-                  >
-                    ⋯
-                  </button>
-                </div>
-                <div className="session-cwd">{cwdLabel}</div>
-                {!pending && <div className="session-uuid">{s.claudeUuid.slice(0, 8)}</div>}
-              </li>
-            );
-          })}
+                return renderSessionRow(
+                  item.session,
+                  item.inGroup,
+                  item.inGroup ? item.groupId : undefined,
+                );
+              })
+          }
         </ul>
       )}
 
@@ -1638,6 +2284,46 @@ export default function Sidebar({
           items={currentMenuItems}
           onClose={onMenuClose}
         />
+      )}
+
+      {/* Move-to-group popover */}
+      {moveGroupPopover && (
+        <>
+          {/* Backdrop to close on outside click */}
+          <div
+            style={{ position: 'fixed', inset: 0, zIndex: 299 }}
+            onClick={() => setMoveGroupPopover(null)}
+          />
+          <div
+            className="move-group-popover"
+            style={{ left: moveGroupPopover.x, top: moveGroupPopover.y }}
+          >
+            {layout.groups.map((g) => (
+              <button
+                key={g.id}
+                className="move-group-popover-item"
+                onClick={() => {
+                  moveToGroup(moveGroupPopover.sessionId, g.id);
+                  setMoveGroupPopover(null);
+                  closeMenuLocal();
+                }}
+              >
+                {g.name}
+              </button>
+            ))}
+            <button
+              className="move-group-popover-item move-group-popover-new"
+              onClick={() => {
+                const name = nextGroupName();
+                createGroup(name, moveGroupPopover.sessionId);
+                setMoveGroupPopover(null);
+                closeMenuLocal();
+              }}
+            >
+              ＋ New group
+            </button>
+          </div>
+        </>
       )}
 
       {preview && !menu && (() => {

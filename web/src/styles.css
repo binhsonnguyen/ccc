@@ -542,6 +542,110 @@ code {
   z-index: 5;
 }
 
+/* ---- sidebar group headers (Phase 2) ---------------------------------- */
+
+.session-group-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 12px 4px 8px;
+  background: var(--overlay);
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  cursor: default;
+  user-select: none;
+  list-style: none;
+}
+.session-group-header:first-child {
+  border-top: none;
+}
+.group-drag-handle {
+  font-size: 10px;
+  color: var(--text-faint);
+  cursor: grab;
+  padding: 0 2px;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 80ms;
+  user-select: none;
+  line-height: 1;
+}
+.session-group-header:hover .group-drag-handle,
+.session-group-header:focus-within .group-drag-handle {
+  opacity: 1;
+}
+.group-drag-handle:active { cursor: grabbing; }
+.session-group-header.dragging-source { opacity: 0.15; }
+.group-chevron {
+  background: none; border: none; cursor: pointer;
+  color: var(--text-faint); font-size: 9px; padding: 0 2px;
+  flex-shrink: 0; line-height: 1;
+}
+.group-name {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.group-count {
+  color: var(--text-faint); font-size: 10px; font-weight: 400;
+  letter-spacing: 0; text-transform: none;
+}
+.group-delete-btn {
+  background: none; border: none; cursor: pointer;
+  color: var(--text-faint); padding: 0 2px; font-size: 13px;
+  opacity: 0; transition: opacity 80ms; line-height: 1;
+  flex-shrink: 0;
+}
+.group-delete-btn.armed { color: var(--danger, #ef4444); opacity: 1; }
+.session-group-header:hover .group-delete-btn { opacity: 1; }
+.group-rename-input {
+  flex: 1; background: var(--input-bg, var(--overlay));
+  border: 1px solid var(--accent); border-radius: 3px;
+  color: var(--text); font: inherit; font-size: 11px;
+  padding: 1px 4px; outline: none;
+}
+
+/* Sessions inside a group get a small left indent */
+.session-in-group {
+  padding-left: 22px;
+}
+
+/* Move-to-group popover */
+.move-group-popover {
+  position: fixed;
+  z-index: 300;
+  background: var(--popup-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  min-width: 160px;
+  padding: 4px 0;
+  overflow: hidden;
+}
+.move-group-popover-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 6px 14px;
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.move-group-popover-item:hover {
+  background: var(--overlay-soft);
+}
+.move-group-popover-new {
+  color: var(--accent);
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+}
+
 /* C-1: per-row activity sparkline. Fixed 24×8 box (6px draw + 2px
  * vertical padding) so the canvas slot doesn't reflow on data change.
  * Static visual — no motion, so prefers-reduced-motion needs no
