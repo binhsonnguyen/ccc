@@ -504,6 +504,44 @@ code {
   background: var(--row-tint, var(--accent));
   color: var(--tint-glyph-active);
 }
+/* ---- sidebar channel reorder (Phase 1) -------------------------------- */
+
+/* Drag handle — braille dots glyph, visible only on row hover. Placed
+   before the monogram chip inside .session-name. */
+.sidebar-drag-handle {
+  font-size: 10px;
+  color: var(--text-faint);
+  cursor: grab;
+  padding: 0 2px;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 80ms;
+  user-select: none;
+  line-height: 1;
+}
+.session:hover .sidebar-drag-handle,
+.session:focus-within .sidebar-drag-handle {
+  opacity: 1;
+}
+.sidebar-drag-handle:active { cursor: grabbing; }
+
+/* Source row is dimmed while the ghost is floating. */
+.session.dragging-source {
+  opacity: 0.15;
+}
+
+/* Drop position indicator line. Inserted imperatively into the list. */
+.sidebar-drop-indicator {
+  display: none;
+  height: 2px;
+  background: var(--accent);
+  margin: 0 12px;
+  border-radius: 1px;
+  pointer-events: none;
+  position: relative;
+  z-index: 5;
+}
+
 /* C-1: per-row activity sparkline. Fixed 24×8 box (6px draw + 2px
  * vertical padding) so the canvas slot doesn't reflow on data change.
  * Static visual — no motion, so prefers-reduced-motion needs no

@@ -15,6 +15,7 @@ import {
 } from '../lib/api';
 import { useShortcut } from '../lib/shortcuts';
 import { cwdMonogram, cwdTint, cwdTintFg } from '../lib/cwdTint';
+import { useSidebarLayout } from '../lib/sidebarLayout';
 import type { C3Entry, Tab } from '../types';
 
 export type SidebarView = 'active' | 'archived';
@@ -190,6 +191,32 @@ export default function Sidebar({
   // visual feedback instead.
   const dragStartRef = useRef<{ x: number; w: number } | null>(null);
   const resizerRef = useRef<HTMLDivElement | null>(null);
+
+  // Sidebar layout (order, groups). Persisted to localStorage.
+  const [layout, setLayout] = useSidebarLayout();
+
+  // Small counter used only to force a re-render after drag commit/cancel
+  // without putting drag state in React state (avoids mousemove thrash).
+  const [dragVersion, setDragVersion] = useState(0);
+
+  // Drag state for row reorder — stored in a ref so mousemove doesn't
+  // trigger React re-renders. The indicator + ghost are DOM nodes managed
+  // imperatively. dragVersion bumps to trigger repaint on commit/cancel.
+  type DragState = {
+    draggingId: string;
+    ghostEl: HTMLDivElement;
+    sourceIdx: number;
+    dropIdx: number;
+    indicatorEl: HTMLDivElement;
+    offsetX: number;
+    offsetY: number;
+    onMove: (e: MouseEvent) => void;
+    onUp: () => void;
+    onKey: (e: KeyboardEvent) => void;
+  };
+  const rowDragRef = useRef<DragState | null>(null);
+  // Ref to the <ul> list so we can place the indicator inside it.
+  const sessionListRef = useRef<HTMLUListElement | null>(null);
 
   const onResizerMouseDown = (e: React.MouseEvent) => {
     if (!resizable) return;
@@ -798,9 +825,39 @@ export default function Sidebar({
       })
     : sessions;
 
+  // Apply saved order when filter is NOT active. When filter is active we
+  // preserve the server order so search results feel natural, and we hide
+  // the drag handle so the user doesn't accidentally reorder while searching.
+  //
+  // applyOrder: for each plain c3Id in `order` (skip "grp:…" Phase-2 slots),
+  // push the matching session if it exists in `pool`, then append any
+  // remaining sessions that had no saved position.
+  function applyOrder(pool: C3Entry[], order: string[]): C3Entry[] {
+    const byId = new Map(pool.map((s) => [s.id, s]));
+    const result: C3Entry[] = [];
+    const placed = new Set<string>();
+    for (const id of order) {
+      if (id.startsWith('grp:')) continue; // Phase 2 placeholder — skip
+      const s = byId.get(id);
+      if (s) {
+        result.push(s);
+        placed.add(id);
+      }
+    }
+    for (const s of pool) {
+      if (!placed.has(s.id)) result.push(s);
+    }
+    return result;
+  }
+
+  const orderedSessions: C3Entry[] | null =
+    !q && visibleSessions ? applyOrder(visibleSessions, layout.order) : visibleSessions;
+
   // Deep-search trigger. Runs when q has ≥3 chars AND (no name matches
   // OR the user explicitly asked). Debounced 250ms — each keystroke
   // resets the timer. Stale responses are dropped via the token ref.
+  // (Use visibleSessions length, not orderedSessions, for the name match
+  // count since they have the same entries, just different ordering.)
   const nameMatchCount = visibleSessions?.length ?? 0;
   const shouldDeepSearch =
     q.length >= 3 && sessions !== null && (searchForced || nameMatchCount === 0);
@@ -861,6 +918,197 @@ export default function Sidebar({
     onOpen(entry);
     onSessionSelected?.();
   };
+
+  // ---- row reorder drag ------------------------------------------------
+
+  const cancelDrag = useCallback(() => {
+    const d = rowDragRef.current;
+    if (!d) return;
+    d.ghostEl.remove();
+    d.indicatorEl.remove();
+    document.body.style.cursor = '';
+    window.removeEventListener('mousemove', d.onMove);
+    window.removeEventListener('mouseup', d.onUp);
+    window.removeEventListener('keydown', d.onKey);
+    rowDragRef.current = null;
+    setDragVersion((v) => v + 1);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const commitDrag = useCallback(() => {
+    const d = rowDragRef.current;
+    if (!d || !orderedSessions) { cancelDrag(); return; }
+    const ids = orderedSessions.map((s) => s.id);
+    // Remove source, insert at drop position.
+    ids.splice(d.sourceIdx, 1);
+    const insertAt = d.dropIdx > d.sourceIdx ? d.dropIdx - 1 : d.dropIdx;
+    ids.splice(insertAt, 0, d.draggingId);
+    setLayout({ ...layout, order: ids });
+    cancelDrag();
+  }, [cancelDrag, layout, orderedSessions, setLayout]);
+
+  const startDrag = useCallback(
+    (e: React.MouseEvent, c3Id: string) => {
+      if (!orderedSessions) return;
+      e.preventDefault();
+
+      const handleEl = e.currentTarget as HTMLElement;
+      const li = handleEl.closest('li') as HTMLLIElement | null;
+      if (!li) return;
+
+      const sourceIdx = orderedSessions.findIndex((s) => s.id === c3Id);
+      if (sourceIdx === -1) return;
+
+      const rect = li.getBoundingClientRect();
+      const offsetX = e.clientX - rect.left;
+      const offsetY = e.clientY - rect.top;
+
+      // Ghost: visual clone that follows the cursor.
+      const ghost = document.createElement('div');
+      ghost.style.cssText = [
+        'position:fixed',
+        `left:${rect.left}px`,
+        `top:${rect.top}px`,
+        `width:${rect.width}px`,
+        'pointer-events:none',
+        'opacity:0.55',
+        'box-shadow:0 4px 16px rgba(0,0,0,0.4)',
+        'z-index:1000',
+        'background:var(--sidebar-bg)',
+        'border-radius:2px',
+      ].join(';');
+      ghost.innerHTML = li.outerHTML;
+      document.body.appendChild(ghost);
+
+      // Drop indicator: a 2 px accent line inserted in the list.
+      const indicator = document.createElement('div');
+      indicator.className = 'sidebar-drop-indicator';
+      sessionListRef.current?.appendChild(indicator);
+
+      document.body.style.cursor = 'grabbing';
+
+      // Compute dropIdx from cursor Y vs. row midpoints.
+      const calcDropIdx = (clientY: number): number => {
+        const list = sessionListRef.current;
+        if (!list) return sourceIdx;
+        const rows = Array.from(list.querySelectorAll<HTMLElement>('li.session'));
+        for (let i = 0; i < rows.length; i++) {
+          const r = rows[i].getBoundingClientRect();
+          if (clientY < r.top + r.height / 2) return i;
+        }
+        return rows.length;
+      };
+
+      // Position indicator before row at dropIdx, or after the last row.
+      const placeIndicator = (dropIdx: number) => {
+        const list = sessionListRef.current;
+        if (!list) return;
+        const rows = Array.from(list.querySelectorAll<HTMLElement>('li.session'));
+        if (rows.length === 0) return;
+        indicator.style.display = 'block';
+        if (dropIdx < rows.length) {
+          list.insertBefore(indicator, rows[dropIdx]);
+        } else {
+          list.appendChild(indicator);
+        }
+      };
+
+      const actualMoveHandler = (ev: MouseEvent) => {
+        const d = rowDragRef.current;
+        if (!d) return;
+        d.ghostEl.style.left = `${ev.clientX - d.offsetX}px`;
+        d.ghostEl.style.top = `${ev.clientY - d.offsetY}px`;
+        const newDropIdx = calcDropIdx(ev.clientY);
+        if (newDropIdx !== d.dropIdx) {
+          d.dropIdx = newDropIdx;
+          placeIndicator(newDropIdx);
+        }
+      };
+
+      const actualUpHandler = () => {
+        commitDrag();
+      };
+
+      const actualKeyHandler = (ev: KeyboardEvent) => {
+        if (ev.key === 'Escape') cancelDrag();
+      };
+
+      rowDragRef.current = {
+        draggingId: c3Id,
+        ghostEl: ghost,
+        sourceIdx,
+        dropIdx: sourceIdx,
+        indicatorEl: indicator,
+        offsetX,
+        offsetY,
+        onMove: actualMoveHandler,
+        onUp: actualUpHandler,
+        onKey: actualKeyHandler,
+      };
+
+      placeIndicator(sourceIdx);
+      window.addEventListener('mousemove', actualMoveHandler);
+      window.addEventListener('mouseup', actualUpHandler);
+      window.addEventListener('keydown', actualKeyHandler);
+      setDragVersion((v) => v + 1);
+    },
+    [cancelDrag, commitDrag, orderedSessions],
+  );
+
+  // Suppress dragVersion from "unused variable" — its purpose is purely
+  // to re-render after drag operations. Referencing it in the JSX would
+  // work but adds visual noise; this void keeps TS happy.
+  void dragVersion;
+
+  // ---- keyboard reorder (Alt+↑/↓) ----------------------------------------
+
+  useShortcut(
+    {
+      id: 'sidebar.row.moveUp',
+      keys: 'Alt+ArrowUp',
+      scope: 'sidebar-focused',
+      label: 'Move focused session up',
+      when: () => focusedRowEntry() !== null && !q,
+      handler: () => {
+        if (q) return;
+        const s = focusedRowEntry();
+        if (!s || !orderedSessions) return;
+        const ids = orderedSessions.map((x) => x.id);
+        const idx = ids.indexOf(s.id);
+        if (idx <= 0) return;
+        [ids[idx - 1], ids[idx]] = [ids[idx], ids[idx - 1]];
+        setLayout({ ...layout, order: ids });
+        // Re-focus the moved row after re-render.
+        window.setTimeout(() => {
+          rowRefs.current.get(s.id)?.focus();
+        }, 0);
+      },
+    },
+    [q, layout, orderedSessions, setLayout, sessions, renamingId],
+  );
+
+  useShortcut(
+    {
+      id: 'sidebar.row.moveDown',
+      keys: 'Alt+ArrowDown',
+      scope: 'sidebar-focused',
+      label: 'Move focused session down',
+      when: () => focusedRowEntry() !== null && !q,
+      handler: () => {
+        if (q) return;
+        const s = focusedRowEntry();
+        if (!s || !orderedSessions) return;
+        const ids = orderedSessions.map((x) => x.id);
+        const idx = ids.indexOf(s.id);
+        if (idx === -1 || idx >= ids.length - 1) return;
+        [ids[idx], ids[idx + 1]] = [ids[idx + 1], ids[idx]];
+        setLayout({ ...layout, order: ids });
+        window.setTimeout(() => {
+          rowRefs.current.get(s.id)?.focus();
+        }, 0);
+      },
+    },
+    [q, layout, orderedSessions, setLayout, sessions, renamingId],
+  );
 
   // Inline width override only in wide mode — narrow / drawer keeps the
   // fixed 280px from CSS so the slide-in math doesn't depend on a JS var.
@@ -1095,8 +1343,8 @@ export default function Sidebar({
           )}
         </div>
       ) : (
-        <ul className="session-list">
-          {(visibleSessions ?? []).map((s) => {
+        <ul className="session-list" ref={sessionListRef}>
+          {(orderedSessions ?? []).map((s) => {
             // Shell entries are NOT "pending" — they have no claudeUuid by
             // design and their PTY spawns immediately on attach. Without
             // this guard the row picks up the pending CSS hue and the
@@ -1107,11 +1355,13 @@ export default function Sidebar({
             const isActive = !pending && s.id === activeC3Id;
             const isOpen = !pending && openSet.has(s.id);
             const openTabIdx = openByC3.get(s.id);
+            const isDraggingThis = rowDragRef.current?.draggingId === s.id;
             const className =
               'session' +
               (isActive ? ' active' : '') +
               (pending ? ' pending' : '') +
-              (isOpen && !isActive ? ' open' : '');
+              (isOpen && !isActive ? ' open' : '') +
+              (isDraggingThis ? ' dragging-source' : '');
             const cwdLabel = s.cwd || '';
             const isRenaming = renamingId === s.id;
             // C-3: hue derives from cwd so multiple sessions on the same
@@ -1184,6 +1434,17 @@ export default function Sidebar({
                 }
               >
                 <div className="session-name">
+                  {!q && (
+                    <span
+                      className="sidebar-drag-handle"
+                      aria-label="Drag to reorder"
+                      title="Drag to reorder"
+                      onMouseDown={(e) => startDrag(e, s.id)}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      ⠿
+                    </span>
+                  )}
                   <span
                     className="session-monogram"
                     aria-hidden="true"
