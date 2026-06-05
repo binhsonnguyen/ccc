@@ -613,6 +613,25 @@ code {
   padding-left: 22px;
 }
 
+/* Placeholder shown inside an expanded group with no members */
+.session-group-empty {
+  padding: 5px 12px 6px 22px;
+  font-size: 11px;
+  font-style: italic;
+  color: var(--text-faint);
+  list-style: none;
+  user-select: none;
+  cursor: default;
+}
+
+/* Highlight a group as the live drop target while dragging a session onto
+   its header (collapsed) or empty placeholder — see Phase B drag. */
+.session-group-header.drop-target,
+.session-group-empty.drop-target {
+  background: var(--accent-soft, rgba(99,102,241,0.18));
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
 /* Move-to-group popover */
 .move-group-popover {
   position: fixed;

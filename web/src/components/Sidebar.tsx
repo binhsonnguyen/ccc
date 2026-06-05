@@ -169,7 +169,8 @@ function buckets_eq(
 type RenderItem =
   | { type: 'session'; session: C3Entry; inGroup: false }
   | { type: 'session'; session: C3Entry; inGroup: true; groupId: string }
-  | { type: 'group'; group: SidebarGroup; members: C3Entry[] };
+  | { type: 'group'; group: SidebarGroup; members: C3Entry[] }
+  | { type: 'group-empty'; groupId: string };
 
 // Build the mixed render list from layout + sessions.
 // 1. Walk layout.order: plain c3Id → ungrouped session, "grp:…" → group block.
@@ -226,8 +227,14 @@ function buildRenderItems(
     if (item.type === 'group') {
       final.push(item);
       if (!item.group.collapsed) {
-        for (const s of item.members) {
-          final.push({ type: 'session', session: s, inGroup: true, groupId: item.group.id });
+        if (item.members.length === 0) {
+          // Expanded but empty group: emit a placeholder row so the block
+          // isn't a bare header (looks broken) and gives drag a drop target.
+          final.push({ type: 'group-empty', groupId: item.group.id });
+        } else {
+          for (const s of item.members) {
+            final.push({ type: 'session', session: s, inGroup: true, groupId: item.group.id });
+          }
         }
       }
     } else {
@@ -236,6 +243,19 @@ function buildRenderItems(
   }
 
   return final;
+}
+
+// Canonical top-level sequence from render items: ungrouped c3Ids and
+// "grp:<id>" slots in display order (includes appended new sessions). Used to
+// rebuild layout.order on reorder/drag without dropping group slots — the old
+// per-scope rebuild lost them, making groups vanish.
+function buildTopSeq(items: RenderItem[]): string[] {
+  const seq: string[] = [];
+  for (const item of items) {
+    if (item.type === 'group') seq.push('grp:' + item.group.id);
+    else if (item.type === 'session' && !item.inGroup) seq.push(item.session.id);
+  }
+  return seq;
 }
 
 // Generate a unique group ID (without the "grp:" prefix; caller adds it).
@@ -285,7 +305,14 @@ export default function Sidebar({
   // '__group__' = dragging a group header.
   type DragState = {
     draggingId: string;
-    groupId: string | null; // null=ungrouped, '__group__'=group drag, else within-group
+    groupId: string | null; // SOURCE scope: null=ungrouped, '__group__'=group drag, else within-group
+    // DESTINATION scope, resolved live each mousemove (row drags only; the
+    // '__group__' header-reorder path ignores it). null=ungrouped top level,
+    // string=that group id.
+    dstGroupId: string | null;
+    // Header/placeholder element currently highlighted as the drop target
+    // (when dropping onto a collapsed or empty group). Cleared on move/commit.
+    dropTargetEl: HTMLElement | null;
     ghostEl: HTMLDivElement;
     sourceIdx: number;
     dropIdx: number;
@@ -387,6 +414,7 @@ export default function Sidebar({
       newLayout.groups = [...newLayout.groups, newGroup];
       newLayout.order = [...newLayout.order, fullSlot];
       setLayout(newLayout);
+      return rawId;
     },
     [layout, setLayout],
   );
@@ -427,6 +455,17 @@ export default function Sidebar({
     while (existing.includes(`Group ${n}`)) n++;
     return `Group ${n}`;
   }, [layout]);
+
+  // Create an empty top-level group (no session needed) and drop straight
+  // into inline-rename so the user can name it. createGroup returns the new
+  // id; we set rename state directly rather than via startGroupRename, which
+  // reads the stale pre-update layout.
+  const createGroupAndRename = useCallback(() => {
+    const name = nextGroupName();
+    const rawId = createGroup(name);
+    setRenamingGroupId(rawId);
+    setRenameGroupDraft(name);
+  }, [createGroup, nextGroupName]);
 
   // Arm delete: first click arms, second click confirms.
   const triggerGroupDelete = useCallback(
@@ -1306,6 +1345,7 @@ export default function Sidebar({
     if (!d) return;
     d.ghostEl.remove();
     d.indicatorEl.remove();
+    d.dropTargetEl?.classList.remove('drop-target');
     document.body.style.cursor = '';
     window.removeEventListener('mousemove', d.onMove);
     window.removeEventListener('mouseup', d.onUp);
@@ -1333,33 +1373,53 @@ export default function Sidebar({
         const newOrder = slots.map((s) => (s.startsWith('grp:') ? groupSlots[gi++] : s));
         setLayout({ ...layout, order: newOrder });
       }
-    } else if (d.groupId !== null) {
-      // Reorder within a group's memberOrder.
-      const g = layout.groups.find((x) => x.id === d.groupId);
-      if (g) {
-        const ids = [...g.memberOrder];
-        ids.splice(d.sourceIdx, 1);
-        const insertAt = d.dropIdx > d.sourceIdx ? d.dropIdx - 1 : d.dropIdx;
-        ids.splice(Math.max(0, insertAt), 0, d.draggingId);
-        setLayout({
-          ...layout,
-          groups: layout.groups.map((x) =>
-            x.id === d.groupId ? { ...x, memberOrder: ids } : x,
-          ),
+    } else {
+      // Cross-scope row move: relocate draggingId into the destination scope
+      // (d.dstGroupId: null = ungrouped top level, else a group) at d.dropIdx.
+      // dropIdx was computed over the destination scope's rows EXCLUDING the
+      // dragged row, so it's a direct insertion index (no off-by-one fixup).
+      if (!renderItems) { cancelDrag(); return; }
+      const id = d.draggingId;
+      const dst = d.dstGroupId;
+
+      const topSeq = buildTopSeq(renderItems);
+
+      // Detach the dragged id from wherever it currently lives.
+      let order = topSeq.filter((s) => s !== id);
+      let groups = layout.groups.map((g) => ({
+        ...g,
+        memberOrder: g.memberOrder.filter((m) => m !== id),
+      }));
+
+      if (dst === null) {
+        // Insert at the dropIdx-th ungrouped slot; group slots stay anchored.
+        const ungIdxs: number[] = [];
+        order.forEach((s, i) => { if (!s.startsWith('grp:')) ungIdxs.push(i); });
+        const insertPos =
+          d.dropIdx >= ungIdxs.length
+            ? (ungIdxs.length > 0 ? ungIdxs[ungIdxs.length - 1] + 1 : order.length)
+            : ungIdxs[d.dropIdx];
+        order = [...order.slice(0, insertPos), id, ...order.slice(insertPos)];
+      } else {
+        groups = groups.map((g) => {
+          if (g.id !== dst) return g;
+          const at = Math.min(Math.max(0, d.dropIdx), g.memberOrder.length);
+          return {
+            ...g,
+            memberOrder: [
+              ...g.memberOrder.slice(0, at),
+              id,
+              ...g.memberOrder.slice(at),
+            ],
+          };
         });
       }
-    } else {
-      // Reorder ungrouped sessions in top-level order.
-      if (!orderedSessions) { cancelDrag(); return; }
-      const ids = orderedSessions.map((s) => s.id);
-      ids.splice(d.sourceIdx, 1);
-      const insertAt = d.dropIdx > d.sourceIdx ? d.dropIdx - 1 : d.dropIdx;
-      ids.splice(Math.max(0, insertAt), 0, d.draggingId);
-      setLayout({ ...layout, order: ids });
+
+      setLayout({ ...layout, order, groups });
     }
 
     cancelDrag();
-  }, [cancelDrag, layout, orderedSessions, setLayout]);
+  }, [cancelDrag, layout, renderItems, setLayout]);
 
   const startDrag = useCallback(
     (e: React.MouseEvent, c3Id: string, groupId: string | null) => {
@@ -1407,40 +1467,98 @@ export default function Sidebar({
 
       document.body.style.cursor = 'grabbing';
 
-      // Compute dropIdx from cursor Y vs. row midpoints.
-      // Only considers rows in the same "scope" (ungrouped or within group).
-      const calcDropIdx = (clientY: number): number => {
+      // Rows of a destination scope, excluding the dragged row itself so the
+      // computed index is a direct insertion index (no off-by-one fixup).
+      const scopeRows = (dst: string | null): HTMLElement[] => {
         const list = sessionListRef.current;
-        if (!list) return sourceIdx;
-        let rows: HTMLElement[];
-        if (groupId === null) {
-          rows = Array.from(list.querySelectorAll<HTMLElement>('li.session:not(.session-in-group)'));
-        } else {
-          rows = Array.from(list.querySelectorAll<HTMLElement>(`li.session[data-group-id="${groupId}"]`));
-        }
-        for (let i = 0; i < rows.length; i++) {
-          const r = rows[i].getBoundingClientRect();
-          if (clientY < r.top + r.height / 2) return i;
-        }
-        return rows.length;
+        if (!list) return [];
+        const sel =
+          dst === null
+            ? 'li.session:not(.session-in-group)'
+            : `li.session.session-in-group[data-group-id="${dst}"]`;
+        return Array.from(list.querySelectorAll<HTMLElement>(sel)).filter(
+          (r) => r.dataset.rowId !== c3Id,
+        );
       };
 
-      // Position indicator before row at dropIdx, or after the last row.
-      const placeIndicator = (dropIdx: number) => {
+      type Drop = { dst: string | null; dropIdx: number; targetEl: HTMLElement | null };
+
+      // Resolve which scope (ungrouped vs a group) the cursor is over and the
+      // insertion index within it. Supports dropping onto a collapsed group
+      // header or an empty group's placeholder (highlight, append/0).
+      const resolveDrop = (clientX: number, clientY: number): Drop => {
+        const list = sessionListRef.current;
+        const el = document.elementFromPoint(clientX, clientY) as HTMLElement | null;
+        const midIdx = (rows: HTMLElement[]): number => {
+          for (let i = 0; i < rows.length; i++) {
+            const r = rows[i].getBoundingClientRect();
+            if (clientY < r.top + r.height / 2) return i;
+          }
+          return rows.length;
+        };
+        if (el && list) {
+          const header = el.closest<HTMLElement>('li.session-group-header[data-group-id]');
+          const emptyPh = el.closest<HTMLElement>('li.session-group-empty[data-group-id]');
+          const inGroupRow = el.closest<HTMLElement>('li.session.session-in-group[data-group-id]');
+          if (header) {
+            const gid = header.dataset.groupId!;
+            // Authoritative collapsed state from layout, not inferred from DOM.
+            const collapsed = !!layout.groups.find((g) => g.id === gid)?.collapsed;
+            if (collapsed) {
+              // Members hidden — append to the group, highlight the header.
+              return { dst: gid, dropIdx: Number.MAX_SAFE_INTEGER, targetEl: header };
+            }
+            const members = scopeRows(gid);
+            if (members.length === 0) {
+              // Expanded with no droppable rows (truly empty, or its only
+              // member is the row being dragged) — highlight header, drop at 0.
+              return { dst: gid, dropIdx: 0, targetEl: header };
+            }
+            // Header of an expanded group with members: drop before the first.
+            return { dst: gid, dropIdx: 0, targetEl: null };
+          }
+          if (emptyPh) {
+            return { dst: emptyPh.dataset.groupId!, dropIdx: 0, targetEl: emptyPh };
+          }
+          if (inGroupRow) {
+            const gid = inGroupRow.dataset.groupId!;
+            return { dst: gid, dropIdx: midIdx(scopeRows(gid)), targetEl: null };
+          }
+        }
+        // Ungrouped top level (over an ungrouped row or list background).
+        return { dst: null, dropIdx: midIdx(scopeRows(null)), targetEl: null };
+      };
+
+      // Position the 2px indicator within the destination scope at dropIdx.
+      const placeIndicator = (dst: string | null, dropIdx: number) => {
         const list = sessionListRef.current;
         if (!list) return;
-        let rows: HTMLElement[];
-        if (groupId === null) {
-          rows = Array.from(list.querySelectorAll<HTMLElement>('li.session:not(.session-in-group)'));
-        } else {
-          rows = Array.from(list.querySelectorAll<HTMLElement>(`li.session[data-group-id="${groupId}"]`));
-        }
-        if (rows.length === 0) return;
+        const rows = scopeRows(dst);
         indicator.style.display = 'block';
-        if (dropIdx < rows.length) {
-          list.insertBefore(indicator, rows[dropIdx]);
-        } else {
+        if (rows.length === 0) {
           list.appendChild(indicator);
+        } else if (dropIdx >= rows.length) {
+          const last = rows[rows.length - 1];
+          list.insertBefore(indicator, last.nextSibling);
+        } else {
+          list.insertBefore(indicator, rows[dropIdx]);
+        }
+      };
+
+      const applyDrop = (res: Drop) => {
+        const d = rowDragRef.current;
+        if (!d) return;
+        if (d.dropTargetEl && d.dropTargetEl !== res.targetEl) {
+          d.dropTargetEl.classList.remove('drop-target');
+        }
+        d.dstGroupId = res.dst;
+        d.dropIdx = res.dropIdx;
+        d.dropTargetEl = res.targetEl;
+        if (res.targetEl) {
+          indicator.style.display = 'none';
+          res.targetEl.classList.add('drop-target');
+        } else {
+          placeIndicator(res.dst, res.dropIdx);
         }
       };
 
@@ -1449,11 +1567,7 @@ export default function Sidebar({
         if (!d) return;
         d.ghostEl.style.left = `${ev.clientX - d.offsetX}px`;
         d.ghostEl.style.top = `${ev.clientY - d.offsetY}px`;
-        const newDropIdx = calcDropIdx(ev.clientY);
-        if (newDropIdx !== d.dropIdx) {
-          d.dropIdx = newDropIdx;
-          placeIndicator(newDropIdx);
-        }
+        applyDrop(resolveDrop(ev.clientX, ev.clientY));
       };
 
       const actualUpHandler = () => {
@@ -1467,6 +1581,10 @@ export default function Sidebar({
       rowDragRef.current = {
         draggingId: c3Id,
         groupId,
+        // startDrag handles session rows only (never group headers), so the
+        // source scope is the initial destination scope.
+        dstGroupId: groupId,
+        dropTargetEl: null,
         ghostEl: ghost,
         sourceIdx,
         dropIdx: sourceIdx,
@@ -1478,7 +1596,7 @@ export default function Sidebar({
         onKey: actualKeyHandler,
       };
 
-      placeIndicator(sourceIdx);
+      applyDrop(resolveDrop(e.clientX, e.clientY));
       window.addEventListener('mousemove', actualMoveHandler);
       window.addEventListener('mouseup', actualUpHandler);
       window.addEventListener('keydown', actualKeyHandler);
@@ -1570,6 +1688,8 @@ export default function Sidebar({
       rowDragRef.current = {
         draggingId: groupId,
         groupId: '__group__',
+        dstGroupId: null,
+        dropTargetEl: null,
         ghostEl: ghost,
         sourceIdx,
         dropIdx: sourceIdx,
@@ -1597,6 +1717,48 @@ export default function Sidebar({
 
   // ---- keyboard reorder (Alt+↑/↓) ----------------------------------------
 
+  // Nudge a row one step within its own scope. An in-group row reorders
+  // inside the group's memberOrder; an ungrouped row reorders within the
+  // ungrouped subsequence of a "grp:"-slot-preserving order (rebuilding from
+  // orderedSessions would drop group slots and make groups vanish).
+  const reorderRow = useCallback(
+    (s: C3Entry, dir: -1 | 1) => {
+      if (q || !renderItems) return;
+      const g = findGroupOf(s.id);
+      if (g) {
+        const ids = [...g.memberOrder];
+        const idx = ids.indexOf(s.id);
+        const j = idx + dir;
+        if (idx < 0 || j < 0 || j >= ids.length) return;
+        [ids[idx], ids[j]] = [ids[j], ids[idx]];
+        setLayout({
+          ...layout,
+          groups: layout.groups.map((x) =>
+            x.id === g.id ? { ...x, memberOrder: ids } : x,
+          ),
+        });
+      } else {
+        const topSeq = buildTopSeq(renderItems);
+        const ungIdxs: number[] = [];
+        topSeq.forEach((x, i) => { if (!x.startsWith('grp:')) ungIdxs.push(i); });
+        const pos = topSeq.indexOf(s.id);
+        const ungPos = ungIdxs.indexOf(pos);
+        const targetUng = ungPos + dir;
+        if (ungPos < 0 || targetUng < 0 || targetUng >= ungIdxs.length) return;
+        const a = ungIdxs[ungPos];
+        const b = ungIdxs[targetUng];
+        const next = [...topSeq];
+        [next[a], next[b]] = [next[b], next[a]];
+        setLayout({ ...layout, order: next });
+      }
+      // Re-focus the moved row after re-render.
+      window.setTimeout(() => {
+        rowRefs.current.get(s.id)?.focus();
+      }, 0);
+    },
+    [q, renderItems, findGroupOf, layout, setLayout],
+  );
+
   useShortcut(
     {
       id: 'sidebar.row.moveUp',
@@ -1605,21 +1767,11 @@ export default function Sidebar({
       label: 'Move focused session up',
       when: () => focusedRowEntry() !== null && !q,
       handler: () => {
-        if (q) return;
         const s = focusedRowEntry();
-        if (!s || !orderedSessions) return;
-        const ids = orderedSessions.map((x) => x.id);
-        const idx = ids.indexOf(s.id);
-        if (idx <= 0) return;
-        [ids[idx - 1], ids[idx]] = [ids[idx], ids[idx - 1]];
-        setLayout({ ...layout, order: ids });
-        // Re-focus the moved row after re-render.
-        window.setTimeout(() => {
-          rowRefs.current.get(s.id)?.focus();
-        }, 0);
+        if (s) reorderRow(s, -1);
       },
     },
-    [q, layout, orderedSessions, setLayout, sessions, renamingId],
+    [q, reorderRow, sessions, renamingId],
   );
 
   useShortcut(
@@ -1630,20 +1782,11 @@ export default function Sidebar({
       label: 'Move focused session down',
       when: () => focusedRowEntry() !== null && !q,
       handler: () => {
-        if (q) return;
         const s = focusedRowEntry();
-        if (!s || !orderedSessions) return;
-        const ids = orderedSessions.map((x) => x.id);
-        const idx = ids.indexOf(s.id);
-        if (idx === -1 || idx >= ids.length - 1) return;
-        [ids[idx], ids[idx + 1]] = [ids[idx + 1], ids[idx]];
-        setLayout({ ...layout, order: ids });
-        window.setTimeout(() => {
-          rowRefs.current.get(s.id)?.focus();
-        }, 0);
+        if (s) reorderRow(s, 1);
       },
     },
-    [q, layout, orderedSessions, setLayout, sessions, renamingId],
+    [q, reorderRow, sessions, renamingId],
   );
 
   // Inline width override only in wide mode — narrow / drawer keeps the
@@ -1906,6 +2049,7 @@ export default function Sidebar({
             autoFocus
             value={renameGroupDraft}
             maxLength={60}
+            onFocus={(e) => e.target.select()}
             onChange={(e) => setRenameGroupDraft(e.target.value)}
             onBlur={commitGroupRename}
             onKeyDown={(e) => {
@@ -2113,6 +2257,15 @@ export default function Sidebar({
           >
             <span className="sidebar-kind-icon-glyph" aria-hidden="true">↪</span>
           </button>
+          <button
+            type="button"
+            className="sidebar-kind-icon"
+            onClick={createGroupAndRename}
+            aria-label="New group"
+            data-tooltip="New group"
+          >
+            <span className="sidebar-kind-icon-glyph" aria-hidden="true">▦</span>
+          </button>
         </div>
 
         {creating && !narrow && (
@@ -2185,6 +2338,18 @@ export default function Sidebar({
               (renderItems ?? []).map((item) => {
                 if (item.type === 'group') {
                   return renderGroupHeader(item.group, item.members.length);
+                }
+                if (item.type === 'group-empty') {
+                  return (
+                    <li
+                      key={`empty-${item.groupId}`}
+                      className="session-group-empty"
+                      data-group-id={item.groupId}
+                      aria-hidden="true"
+                    >
+                      empty — move sessions here
+                    </li>
+                  );
                 }
                 return renderSessionRow(
                   item.session,
