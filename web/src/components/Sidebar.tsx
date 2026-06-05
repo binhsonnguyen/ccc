@@ -1759,6 +1759,59 @@ export default function Sidebar({
     [q, renderItems, findGroupOf, layout, setLayout],
   );
 
+  // Move a group one top-level position up/down — swap its "grp:" slot with
+  // the adjacent top-level entry (an ungrouped session or another group), the
+  // keyboard mirror of the drag handle. Single-step semantics, so a group can
+  // be nudged in between ungrouped rows (which group-header drag can't do).
+  const reorderGroup = useCallback(
+    (gid: string, dir: -1 | 1) => {
+      if (q || !renderItems) return;
+      const seq = buildTopSeq(renderItems);
+      const idx = seq.indexOf('grp:' + gid);
+      const j = idx + dir;
+      if (idx < 0 || j < 0 || j >= seq.length) return;
+      [seq[idx], seq[j]] = [seq[j], seq[idx]];
+      setLayout({ ...layout, order: seq });
+      // Re-focus the moved group header after re-render.
+      window.setTimeout(() => {
+        sessionListRef.current
+          ?.querySelector<HTMLElement>(`li.session-group-header[data-group-id="${gid}"]`)
+          ?.focus();
+      }, 0);
+    },
+    [q, renderItems, layout, setLayout],
+  );
+
+  useShortcut(
+    {
+      id: 'sidebar.group.moveUp',
+      keys: 'Alt+ArrowUp',
+      scope: 'sidebar-focused',
+      label: 'Move focused group up',
+      when: () => focusedGroupId() !== null && !q,
+      handler: () => {
+        const gid = focusedGroupId();
+        if (gid) reorderGroup(gid, -1);
+      },
+    },
+    [q, reorderGroup],
+  );
+
+  useShortcut(
+    {
+      id: 'sidebar.group.moveDown',
+      keys: 'Alt+ArrowDown',
+      scope: 'sidebar-focused',
+      label: 'Move focused group down',
+      when: () => focusedGroupId() !== null && !q,
+      handler: () => {
+        const gid = focusedGroupId();
+        if (gid) reorderGroup(gid, 1);
+      },
+    },
+    [q, reorderGroup],
+  );
+
   useShortcut(
     {
       id: 'sidebar.row.moveUp',
