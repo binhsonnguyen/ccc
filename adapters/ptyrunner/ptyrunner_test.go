@@ -158,6 +158,96 @@ func TestEnsureUTF8Locale_RespectsExisting(t *testing.T) {
 	}
 }
 
+func TestParseEnv0(t *testing.T) {
+	// NUL-delimited, with a value that itself contains a newline.
+	raw := []byte("PATH=/usr/bin:/bin\x00LANG=en_US.UTF-8\x00MULTI=line1\nline2\x00")
+	got := parseEnv0(raw)
+	want := []string{"PATH=/usr/bin:/bin", "LANG=en_US.UTF-8", "MULTI=line1\nline2"}
+	if len(got) != len(want) {
+		t.Fatalf("parseEnv0 len=%d want %d: %v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("parseEnv0[%d]=%q want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestParseEnv0_DropsMalformed(t *testing.T) {
+	// Empty segments, a no-'=' token, and a leading-'=' token must all drop.
+	raw := []byte("\x00noequals\x00=novalue\x00OK=1\x00")
+	got := parseEnv0(raw)
+	if len(got) != 1 || got[0] != "OK=1" {
+		t.Fatalf("expected only OK=1, got %v", got)
+	}
+}
+
+func TestParseEnv0_EmptyReturnsNil(t *testing.T) {
+	if got := parseEnv0(nil); got != nil {
+		t.Fatalf("expected nil for empty input, got %v", got)
+	}
+}
+
+func TestSetEnv_ReplacesAndAppends(t *testing.T) {
+	env := []string{"A=1", "TERM=dumb", "B=2"}
+	got := setEnv(env, "TERM", "xterm-256color")
+	found := ""
+	count := 0
+	for _, kv := range got {
+		if strings.HasPrefix(kv, "TERM=") {
+			found = kv
+			count++
+		}
+	}
+	if count != 1 || found != "TERM=xterm-256color" {
+		t.Fatalf("setEnv replace: count=%d found=%q", count, found)
+	}
+	// setEnv must not mutate the caller's slice.
+	if env[1] != "TERM=dumb" {
+		t.Fatalf("setEnv mutated input: %v", env)
+	}
+	got2 := setEnv([]string{"A=1"}, "TERM", "x")
+	if got2[len(got2)-1] != "TERM=x" {
+		t.Fatalf("setEnv append: %v", got2)
+	}
+}
+
+// buildChildEnv must always force TERM and guarantee a UTF-8 locale +
+// augmented PATH regardless of how thin the base env is.
+func TestBuildChildEnv_ForcesTermAndLocale(t *testing.T) {
+	got := buildChildEnv([]string{"TERM=dumb"})
+	var term, lang, path string
+	for _, kv := range got {
+		switch {
+		case strings.HasPrefix(kv, "TERM="):
+			term = kv
+		case strings.HasPrefix(kv, "LANG="):
+			lang = kv
+		case strings.HasPrefix(kv, "PATH="):
+			path = kv
+		}
+	}
+	if term != "TERM=xterm-256color" {
+		t.Fatalf("TERM not forced: %q", term)
+	}
+	if lang != "LANG=en_US.UTF-8" {
+		t.Fatalf("LANG not ensured: %q", lang)
+	}
+	if path == "" {
+		t.Fatalf("PATH not augmented; env=%v", got)
+	}
+}
+
+// A login env that already carries a UTF-8 locale must be preserved.
+func TestBuildChildEnv_PreservesExistingLocale(t *testing.T) {
+	got := buildChildEnv([]string{"LANG=vi_VN.UTF-8", "PATH=/usr/bin"})
+	for _, kv := range got {
+		if strings.HasPrefix(kv, "LANG=") && kv != "LANG=vi_VN.UTF-8" {
+			t.Fatalf("overrode existing LANG: %q", kv)
+		}
+	}
+}
+
 func TestAugmentPath_NoDuplicates(t *testing.T) {
 	env := []string{"PATH=/opt/homebrew/bin:/usr/bin"}
 	got := augmentPath(env)

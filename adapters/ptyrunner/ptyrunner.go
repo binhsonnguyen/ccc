@@ -7,11 +7,15 @@
 package ptyrunner
 
 import (
+	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/creack/pty"
 )
@@ -156,6 +160,110 @@ func localeValue(kv, key string) string {
 	return ""
 }
 
+var (
+	loginEnvOnce sync.Once
+	loginEnvVal  []string
+)
+
+// loginShellEnv resolves the user's interactive login-shell environment
+// once and caches it for the lifetime of the process.
+//
+// c3-server is typically launched by launchd (`brew services start c3`),
+// which hands it a stripped environment: no LANG/LC_*, a bare
+// /usr/bin:/bin PATH, and none of the user's tool-manager vars (NVM_BIN,
+// PNPM_HOME, BUN_INSTALL, JAVA_HOME, …). Spawning PTY children straight
+// from os.Environ() therefore starves them — claude can't find the user's
+// node/pnpm, UTF-8 text degrades to Mac Roman mojibake, editors/pagers
+// are unset, and so on. Each gap previously needed its own band-aid
+// (augmentPath for PATH, ensureUTF8Locale for LANG).
+//
+// Instead we do what Terminal.app / iTerm (and VS Code's "resolve shell
+// environment") do: run the login shell once, dump its environment, and
+// use that as the base for every PTY. -l AND -i so both the login files
+// (.zprofile/.zlogin) and the interactive rc (.zshrc — where LANG/PATH
+// tweaks usually live) are sourced. `env -0` emits NUL-delimited
+// KEY=VALUE so values containing newlines survive intact.
+//
+// Returns nil on any failure (no SHELL, lookup miss, timeout, empty
+// output); callers then fall back to os.Environ() + the targeted fixups.
+func loginShellEnv() []string {
+	loginEnvOnce.Do(func() { loginEnvVal = resolveLoginShellEnv() })
+	return loginEnvVal
+}
+
+func resolveLoginShellEnv() []string {
+	sh := os.Getenv("SHELL")
+	if sh == "" {
+		sh = "/bin/bash"
+	}
+	bin, err := exec.LookPath(sh)
+	if err != nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, "-l", "-i", "-c", "env -0")
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	// Discard the interactive shell's chatter (prompts, plugin warnings,
+	// gitstatus init noise) — we only care about the NUL-delimited env on
+	// stdout. Stdin stays nil so `-i` never blocks waiting for input.
+	cmd.Stderr = nil
+	_ = cmd.Run() // partial stdout is still usable; parseEnv0 validates.
+	return parseEnv0(out.Bytes())
+}
+
+// parseEnv0 splits NUL-delimited `env -0` output into a []string of
+// "KEY=VALUE" entries, dropping anything that isn't a well-formed
+// assignment with a non-empty key. Returns nil if nothing usable parses.
+func parseEnv0(b []byte) []string {
+	var env []string
+	for _, p := range bytes.Split(b, []byte{0}) {
+		if eq := bytes.IndexByte(p, '='); eq > 0 {
+			env = append(env, string(p))
+		}
+	}
+	if len(env) == 0 {
+		return nil
+	}
+	return env
+}
+
+// setEnv replaces the value of key in env, or appends it when absent.
+func setEnv(env []string, key, val string) []string {
+	prefix := key + "="
+	for i, kv := range env {
+		if strings.HasPrefix(kv, prefix) {
+			out := make([]string, len(env))
+			copy(out, env)
+			out[i] = prefix + val
+			return out
+		}
+	}
+	return append(env, prefix+val)
+}
+
+// childEnv builds the environment for a spawned PTY child. It prefers the
+// resolved login-shell environment and degrades to os.Environ() when that
+// can't be obtained. Either way it then forces TERM (so claude picks the
+// truecolor TUI) and runs the PATH/locale safety nets, so even a partial
+// or missing login env still yields a workable terminal.
+func childEnv() []string {
+	base := loginShellEnv()
+	if base == nil {
+		base = os.Environ()
+	}
+	return buildChildEnv(base)
+}
+
+// buildChildEnv is the pure core of childEnv, split out for testing.
+func buildChildEnv(base []string) []string {
+	base = setEnv(base, "TERM", "xterm-256color")
+	base = augmentPath(base)
+	base = ensureUTF8Locale(base)
+	return base
+}
+
 // Start spawns claude in cwd. Command shape depends on (uuid, firstPrompt):
 //
 //	uuid != "" && firstPrompt != ""  → claude --session-id <uuid> <firstPrompt>
@@ -209,15 +317,10 @@ func Start(cwd, uuid, firstPrompt string) (*Session, error) {
 		cmd = exec.Command(claudePath)
 	}
 	cmd.Dir = cwd
-	// Inherit env, force TERM so claude doesn't fall back to dumb. Also
-	// prepend the fallback bin dirs to PATH so claude itself can find
-	// any auxiliary tools (node, npx, etc.) it might exec — same
-	// reasoning as resolveClaude.
-	env := os.Environ()
-	env = append(env, "TERM=xterm-256color")
-	env = augmentPath(env)
-	env = ensureUTF8Locale(env)
-	cmd.Env = env
+	// Base the child env on the user's resolved login-shell environment
+	// (full PATH, locale, tool-manager vars), with TERM forced and the
+	// PATH/locale safety nets applied. See childEnv / loginShellEnv.
+	cmd.Env = childEnv()
 
 	master, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 24, Cols: 80})
 	if err != nil {
@@ -261,11 +364,10 @@ func StartShell(cwd string, argv []string) (*Session, error) {
 	}
 	cmd := exec.Command(bin, argv[1:]...)
 	cmd.Dir = cwd
-	env := os.Environ()
-	env = append(env, "TERM=xterm-256color")
-	env = augmentPath(env)
-	env = ensureUTF8Locale(env)
-	cmd.Env = env
+	// Same resolved-login-shell base as Start. The shell will re-source
+	// its init files on top (harmless: exports are idempotent), but now
+	// it starts from a complete env instead of launchd's stripped one.
+	cmd.Env = childEnv()
 
 	master, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 24, Cols: 80})
 	if err != nil {
