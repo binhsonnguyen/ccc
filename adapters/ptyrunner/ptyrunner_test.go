@@ -109,6 +109,55 @@ func TestStartShell_DoesNotCreateClaudeJSONL(t *testing.T) {
 	}
 }
 
+func localeLines(env []string) []string {
+	var out []string
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "LANG=") ||
+			strings.HasPrefix(kv, "LC_ALL=") ||
+			strings.HasPrefix(kv, "LC_CTYPE=") {
+			out = append(out, kv)
+		}
+	}
+	return out
+}
+
+// The launchd bug: empty/absent locale → inject a UTF-8 LANG so children
+// don't fall back to Mac Roman and mangle Vietnamese text.
+func TestEnsureUTF8Locale_InjectsWhenAbsent(t *testing.T) {
+	got := ensureUTF8Locale([]string{"FOO=bar"})
+	lines := localeLines(got)
+	if len(lines) != 1 || lines[0] != "LANG=en_US.UTF-8" {
+		t.Fatalf("expected LANG=en_US.UTF-8 injected, got %v", lines)
+	}
+}
+
+// An empty LANG= (what we actually measured under launchd) counts as
+// unset and must still get the UTF-8 default.
+func TestEnsureUTF8Locale_InjectsWhenEmpty(t *testing.T) {
+	got := ensureUTF8Locale([]string{"LANG=", "LC_ALL=", "LC_CTYPE="})
+	found := false
+	for _, kv := range got {
+		if kv == "LANG=en_US.UTF-8" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected LANG=en_US.UTF-8 injected for empty locale; got %v", localeLines(got))
+	}
+}
+
+// A user who already set a UTF-8 locale (or any locale at all) must be
+// left untouched — we never override an explicit choice.
+func TestEnsureUTF8Locale_RespectsExisting(t *testing.T) {
+	for _, existing := range []string{"LANG=vi_VN.UTF-8", "LC_CTYPE=en_GB.UTF-8", "LC_ALL=C"} {
+		got := ensureUTF8Locale([]string{existing, "FOO=bar"})
+		lines := localeLines(got)
+		if len(lines) != 1 || lines[0] != existing {
+			t.Fatalf("ensureUTF8Locale altered explicit locale %q: %v", existing, lines)
+		}
+	}
+}
+
 func TestAugmentPath_NoDuplicates(t *testing.T) {
 	env := []string{"PATH=/opt/homebrew/bin:/usr/bin"}
 	got := augmentPath(env)

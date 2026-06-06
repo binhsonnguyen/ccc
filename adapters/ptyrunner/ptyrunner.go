@@ -113,6 +113,49 @@ func augmentPath(env []string) []string {
 	return append(env, kv)
 }
 
+// ensureUTF8Locale returns env with a UTF-8 LANG injected when no locale
+// is configured at all. Without this, children inherit an empty/"C"
+// locale and macOS programs (zsh's line editor, claude/node, etc.) fall
+// back to the legacy Mac Roman 8-bit charset: typed/echoed UTF-8 bytes
+// get reinterpreted as Mac Roman glyphs, so "Tiếng Việt" surfaces in the
+// xterm buffer (and therefore in copied text) as mojibake like
+// "Ti·∫øng Vi·ªát".
+//
+// This bites specifically because c3-server is usually launched by
+// launchd (`brew services start c3`), whose environment has no LANG /
+// LC_* at all — and the login shell's init files don't set them either
+// (Terminal.app/iTerm normally export LANG themselves, a step we have to
+// reproduce here). Same minimal-environment trap as augmentPath.
+//
+// We only act when the locale is entirely unset: if LC_ALL, LC_CTYPE, or
+// LANG is already present we respect the user's explicit choice. LANG is
+// the lowest-priority default, so injecting it never overrides a more
+// specific LC_* the user did set. en_US.UTF-8 is used because it is
+// universally available on macOS (unlike C.UTF-8, which is Linux-only).
+func ensureUTF8Locale(env []string) []string {
+	for _, kv := range env {
+		if v := localeValue(kv, "LC_ALL"); v != "" {
+			return env
+		}
+		if v := localeValue(kv, "LC_CTYPE"); v != "" {
+			return env
+		}
+		if v := localeValue(kv, "LANG"); v != "" {
+			return env
+		}
+	}
+	return append(env, "LANG=en_US.UTF-8")
+}
+
+// localeValue returns the value of kv if it is the `key=...` assignment,
+// else "". Empty assignments (e.g. "LANG=") count as unset.
+func localeValue(kv, key string) string {
+	if strings.HasPrefix(kv, key+"=") {
+		return strings.TrimPrefix(kv, key+"=")
+	}
+	return ""
+}
+
 // Start spawns claude in cwd. Command shape depends on (uuid, firstPrompt):
 //
 //	uuid != "" && firstPrompt != ""  → claude --session-id <uuid> <firstPrompt>
@@ -173,6 +216,7 @@ func Start(cwd, uuid, firstPrompt string) (*Session, error) {
 	env := os.Environ()
 	env = append(env, "TERM=xterm-256color")
 	env = augmentPath(env)
+	env = ensureUTF8Locale(env)
 	cmd.Env = env
 
 	master, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 24, Cols: 80})
@@ -220,6 +264,7 @@ func StartShell(cwd string, argv []string) (*Session, error) {
 	env := os.Environ()
 	env = append(env, "TERM=xterm-256color")
 	env = augmentPath(env)
+	env = ensureUTF8Locale(env)
 	cmd.Env = env
 
 	master, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 24, Cols: 80})
