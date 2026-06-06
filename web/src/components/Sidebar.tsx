@@ -190,21 +190,27 @@ function buildRenderItems(
 
   const result: RenderItem[] = [];
   const placed = new Set<string>(); // c3Ids placed (either ungrouped or in group)
+  const emittedGroups = new Set<string>(); // group ids already pushed
+
+  const pushGroup = (g: SidebarGroup) => {
+    const members: C3Entry[] = [];
+    for (const mid of g.memberOrder) {
+      const s = byId.get(mid);
+      if (s) {
+        members.push(s);
+        placed.add(mid);
+      }
+    }
+    result.push({ type: 'group', group: g, members });
+    emittedGroups.add(g.id);
+  };
 
   for (const slot of layout.order) {
     if (slot.startsWith('grp:')) {
       const groupId = slot.slice(4);
       const g = groupById.get(groupId);
       if (!g) continue;
-      const members: C3Entry[] = [];
-      for (const mid of g.memberOrder) {
-        const s = byId.get(mid);
-        if (s) {
-          members.push(s);
-          placed.add(mid);
-        }
-      }
-      result.push({ type: 'group', group: g, members });
+      pushGroup(g);
     } else {
       const s = byId.get(slot);
       if (s && !inAnyGroup.has(slot)) {
@@ -212,6 +218,14 @@ function buildRenderItems(
         placed.add(slot);
       }
     }
+  }
+
+  // Defensive: emit any group that exists in `groups` but whose "grp:" slot is
+  // missing from `order` (orphan). normalizeLayout repairs this on load/save,
+  // but rendering them anyway means a stale/cross-tab layout never hides a
+  // group + its sessions. Appended in groups-array order, after ordered slots.
+  for (const g of layout.groups) {
+    if (!emittedGroups.has(g.id)) pushGroup(g);
   }
 
   // Append ungrouped sessions not yet placed (new sessions, not in order).
