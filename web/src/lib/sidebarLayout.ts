@@ -1,7 +1,7 @@
 // Sidebar layout persistence — session order (Phase 1) and groups (Phase 2).
 // All schema knowledge lives here; localStorage key is 'c3.sidebar-layout'.
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 
 export type SidebarGroup = {
   id: string;
@@ -85,6 +85,21 @@ export function useSidebarLayout(): [SidebarLayout, (l: SidebarLayout) => void] 
   const setLayout = useCallback((l: SidebarLayout) => {
     saveSidebarLayout(l);
     setLayoutState(l);
+  }, []);
+
+  // Multi-tab sync: the `storage` event fires only in OTHER tabs (not the one
+  // that called setItem), so there's no feedback loop with setLayout. When
+  // another tab persists a new layout we adopt it, keeping every open tab in
+  // sync and preventing a stale tab from later overwriting (last-writer-wins)
+  // with an outdated order/groups. loadSidebarLayout normalizes, so the adopted
+  // value is already invariant-clean.
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== null && e.key !== LS_KEY) return; // null = storage cleared
+      setLayoutState(loadSidebarLayout());
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
   }, []);
 
   return [layout, setLayout];
