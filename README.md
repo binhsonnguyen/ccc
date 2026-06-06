@@ -132,8 +132,10 @@ on reboot, so no explicit cleanup is needed.
 
 `core/` holds entities + use-cases (Go, no I/O). `adapters/` are
 the I/O: `claudefs` reads Claude's JSONL, `archivejson` reads/writes
-c3's `archived.json` with `flock`, `ptyrunner` spawns `claude` in a
-PTY. `internal/ptymgr` keeps the live PTY map with scrollback,
+c3's `archived.json` with `flock`, `ptyrunner` spawns `claude` (and
+shell tabs) in a PTY — basing the child env on the resolved
+login-shell environment so PATH/locale/tool vars match a normal
+terminal even under launchd. `internal/ptymgr` keeps the live PTY map with scrollback,
 activity counters, and discovery for pending uuids.
 `cmd/c3-bin` is the CLI (calls core in-process; no daemon).
 `cmd/c3-server` is the local HTTP+WS server for the GUI; `web/`

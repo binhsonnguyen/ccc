@@ -81,7 +81,9 @@ adapters/
   claudefs/                      -- reads ~/.claude/projects; Scan, ScanProject, Cwds
   archivejson/                   -- ArchiveStore over archived.json; Mutate wraps
                                     read-modify-write in syscall.Flock
-  ptyrunner/                     -- spawns `claude [--resume <uuid>]` in a PTY
+  ptyrunner/                     -- spawns `claude [--resume <uuid>]` / shells in a
+                                    PTY. Bases the child env on the resolved
+                                    login-shell environment (see §Environment)
 
 internal/
   picker/                        -- fzf wrapper for the CLI
@@ -164,6 +166,38 @@ binary = stdout; text JSON `{type:"pending"|"ready"|"kicked"|"exit"|"error"}`.
   crashed previous run doesn't block startup.
 - Killing the server kills all PTYs. Durability comes from `claude`
   writing its own JSONL, not from keeping PTYs alive across restarts.
+
+## Environment (load-bearing)
+
+c3-server is usually launched by **launchd** (`brew services start c3`),
+which hands it a *stripped* environment: no `LANG`/`LC_*`, a bare
+`/usr/bin:/bin` PATH, and none of the user's tool-manager vars
+(`NVM_BIN`, `PNPM_HOME`, `JAVA_HOME`, `BUN_INSTALL`, …). Spawning PTY
+children straight from `os.Environ()` therefore starves them — claude
+can't find the user's `node`/`pnpm`, UTF-8 text degrades to **Mac Roman
+mojibake** (`Tiếng Việt` → `Ti·∫øng Vi·ªát`, both on screen *and* in any
+copied selection), editors/pagers are unset.
+
+- **`ptyrunner.childEnv()` is the single env source for every PTY**
+  (both `Start` for claude and `StartShell` for shell tabs). It bases the
+  child env on the user's **resolved login-shell environment**, the same
+  trick Terminal.app/iTerm do implicitly and VS Code calls "resolve shell
+  environment".
+- **`loginShellEnv()`** runs `$SHELL -l -i -c 'env -0'` **once**, cached
+  for process lifetime, 5 s timeout, NUL-delimited parse (so values with
+  newlines survive). `-l` *and* `-i` because the locale/PATH exports
+  usually live in the interactive rc (`.zshrc`), which a non-interactive
+  login shell would skip. stderr is discarded (prompt/plugin noise);
+  stdin stays nil so `-i` never blocks.
+- **Safety nets always applied on top:** `TERM=xterm-256color` is forced;
+  `augmentPath` guarantees the claude/tool fallback bin dirs; and
+  `ensureUTF8Locale` injects `LANG=en_US.UTF-8` only when no locale is
+  set (`en_US.UTF-8` because macOS has no `C.UTF-8`). These also serve as
+  the **fallback** when login-shell resolution fails (no SHELL, timeout,
+  empty output) — c3 still spawns a workable terminal.
+- **Not a copy bug.** xterm's selection→clipboard path is fine; the
+  buffer was already wrong because the bytes were rendered under the wrong
+  charset. Fixing the spawn env fixes both render and copy at once.
 
 ## Concurrency rules (load-bearing)
 
