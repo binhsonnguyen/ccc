@@ -15,6 +15,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { formatKeys, useShortcut } from '../lib/shortcuts';
+import { loadSidebarLayout } from '../lib/sidebarLayout';
 import type { ThemeName } from '../lib/themes';
 import type { C3Entry, Tab } from '../types';
 import { primaryPane } from '../types';
@@ -35,6 +36,8 @@ export interface PaletteActions {
   // cheatsheet footer still works as a click target for keyboard-shy
   // users, but typing is faster).
   setTheme: (n: ThemeName) => void;
+  // Reveal a sidebar group (expand + scroll into view) from the Groups section.
+  revealGroup: (groupId: string) => void;
 }
 
 interface Props {
@@ -50,7 +53,9 @@ interface Props {
   actions: PaletteActions;
 }
 
-type Group = 'Sessions' | 'Tabs' | 'Actions';
+// Section bucket for a palette row. Not to be confused with SidebarGroup —
+// these are the palette's own display sections. 'Groups' lists sidebar groups.
+type Group = 'Sessions' | 'Groups' | 'Tabs' | 'Actions';
 
 interface Item {
   id: string;
@@ -103,6 +108,7 @@ function fuzzyMatch(query: string, target: string): number {
 }
 
 const SESS_LIMIT = 8;
+const GRP_LIMIT = 8;
 const TAB_LIMIT = 8;
 const ACT_LIMIT = 12;
 
@@ -176,18 +182,29 @@ export default function Palette({
     const q = query.trim();
     const out: Item[] = [];
 
+    // Sidebar grouping (localStorage snapshot, read fresh each open). Lets the
+    // palette annotate sessions with their group and offer a Groups section.
+    const layout = loadSidebarLayout();
+    const groupOf = new Map<string, string>(); // c3Id → group name
+    for (const g of layout.groups) {
+      for (const mid of g.memberOrder) groupOf.set(mid, g.name);
+    }
+    const sessIds = new Set((sessions ?? []).map((s) => s.id));
+
     // Sessions
     const sessList: Item[] = [];
     if (sessions) {
       for (const s of sessions) {
-        const hay = (s.name || '') + ' ' + (s.cwd || '');
+        const gname = groupOf.get(s.id);
+        // Group name joins the haystack so "groupname session" narrows too.
+        const hay = (s.name || '') + ' ' + (gname || '') + ' ' + (s.cwd || '');
         const score = fuzzyMatch(q, hay);
         if (score <= 0) continue;
         sessList.push({
           id: 'sess:' + s.id,
           group: 'Sessions',
           label: s.name || s.id,
-          detail: s.cwd,
+          detail: gname ? `${gname} · ${s.cwd || ''}` : s.cwd,
           score,
           run: () => onOpenSession(s),
         });
@@ -195,6 +212,24 @@ export default function Palette({
     }
     sessList.sort((a, b) => b.score - a.score);
     out.push(...sessList.slice(0, SESS_LIMIT));
+
+    // Groups — selecting one reveals it in the sidebar (expand + scroll).
+    const groupList: Item[] = [];
+    for (const g of layout.groups) {
+      const score = fuzzyMatch(q, g.name + ' group');
+      if (score <= 0) continue;
+      const count = g.memberOrder.filter((id) => sessIds.has(id)).length;
+      groupList.push({
+        id: 'grp:' + g.id,
+        group: 'Groups',
+        label: g.name,
+        detail: count === 1 ? '1 session' : `${count} sessions`,
+        score,
+        run: () => actions.revealGroup(g.id),
+      });
+    }
+    groupList.sort((a, b) => b.score - a.score);
+    out.push(...groupList.slice(0, GRP_LIMIT));
 
     // Tabs (only meaningful in open state — switch vs open differs)
     const tabList: Item[] = [];

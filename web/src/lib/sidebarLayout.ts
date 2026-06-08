@@ -1,7 +1,8 @@
 // Sidebar layout persistence — session order (Phase 1) and groups (Phase 2).
 // All schema knowledge lives here; localStorage key is 'c3.sidebar-layout'.
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
+import { getSidebarLayout, putSidebarLayout } from './api';
 
 export type SidebarGroup = {
   id: string;
@@ -78,21 +79,88 @@ export function saveSidebarLayout(l: SidebarLayout): void {
   }
 }
 
-// Hook: returns [layout, setLayout]. setLayout also writes to localStorage.
+const PUT_DEBOUNCE_MS = 400;
+
+// Hook: returns [layout, setLayout].
+//
+// Persistence is two-tier. localStorage is a same-machine cache that gives an
+// instant first paint and an offline fallback; the server sidecar
+// (sidebar-layout.json) is the source of truth that makes groups portable
+// across browsers/devices hitting the same daemon. On mount we paint from the
+// cache immediately, then reconcile with the server: adopt the server copy if
+// the user hasn't edited yet, or migrate the local copy up if the server has
+// nothing. Each setLayout writes the cache synchronously and pushes to the
+// server debounced.
 export function useSidebarLayout(): [SidebarLayout, (l: SidebarLayout) => void] {
   const [layout, setLayoutState] = useState<SidebarLayout>(loadSidebarLayout);
+  // True once the user has changed the layout this session, so the async
+  // server load doesn't clobber an in-progress edit (load can resolve late).
+  const dirtyRef = useRef(false);
+  const putTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const setLayout = useCallback((l: SidebarLayout) => {
-    saveSidebarLayout(l);
-    setLayoutState(l);
+  const pushToServer = useCallback((l: SidebarLayout) => {
+    if (putTimer.current) clearTimeout(putTimer.current);
+    putTimer.current = setTimeout(() => {
+      void putSidebarLayout(normalizeLayout(l)).catch(() => {
+        // Offline / server down: localStorage already holds the value, so the
+        // change isn't lost; the next successful push reconciles the server.
+      });
+    }, PUT_DEBOUNCE_MS);
   }, []);
 
-  // Multi-tab sync: the `storage` event fires only in OTHER tabs (not the one
-  // that called setItem), so there's no feedback loop with setLayout. When
-  // another tab persists a new layout we adopt it, keeping every open tab in
-  // sync and preventing a stale tab from later overwriting (last-writer-wins)
-  // with an outdated order/groups. loadSidebarLayout normalizes, so the adopted
-  // value is already invariant-clean.
+  const setLayout = useCallback(
+    (l: SidebarLayout) => {
+      dirtyRef.current = true;
+      saveSidebarLayout(l);
+      setLayoutState(l);
+      pushToServer(l);
+    },
+    [pushToServer],
+  );
+
+  // Mount-time reconcile with the server (runs once).
+  useEffect(() => {
+    let cancelled = false;
+    void getSidebarLayout()
+      .then((remote) => {
+        if (cancelled) return;
+        if (remote && isValidLayout(remote)) {
+          if (dirtyRef.current) return; // don't stomp a local edit in flight
+          const norm = normalizeLayout(remote);
+          saveSidebarLayout(norm); // refresh the cache to match the server
+          setLayoutState(norm);
+        } else if (!dirtyRef.current) {
+          // Server has nothing yet: seed it from the local cache (migration
+          // for users who grouped before persistence existed). Skip if the
+          // user already edited (their own debounced push covers it) or the
+          // local layout is empty — no point writing an empty file.
+          const local = loadSidebarLayout();
+          if (local.order.length || local.groups.length) {
+            void putSidebarLayout(local).catch(() => {});
+          }
+        }
+      })
+      .catch(() => {
+        // Server unreachable: stay on the cached layout.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Flush guard: cancel any pending debounced PUT on unmount so it doesn't
+  // fire (and run normalizeLayout) against a stale closure after teardown.
+  useEffect(() => {
+    return () => {
+      if (putTimer.current) clearTimeout(putTimer.current);
+    };
+  }, []);
+
+  // Multi-tab sync (same machine): the `storage` event fires only in OTHER
+  // tabs, so there's no feedback loop with setLayout. Adopting the persisted
+  // value keeps every open tab in sync and stops a stale tab from later
+  // overwriting with an outdated layout. This is a local read only — it does
+  // not re-push to the server (the tab that wrote it already did).
   useEffect(() => {
     const onStorage = (e: StorageEvent) => {
       if (e.key !== null && e.key !== LS_KEY) return; // null = storage cleared

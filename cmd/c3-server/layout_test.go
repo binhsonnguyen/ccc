@@ -114,6 +114,54 @@ func TestLayoutPutEmptyBodyRejected(t *testing.T) {
 	}
 }
 
+// The sidebar-layout endpoint reuses the same jsonFileHandler plumbing but
+// writes a distinct file (sidebar-layout.json), so a missing-file 204 and a
+// PUT→GET roundtrip into the right path is enough to cover the wiring.
+func TestSidebarLayoutMissingReturns204(t *testing.T) {
+	withTempXDG(t)
+	h := handleSidebarLayout("127.0.0.1:0", "localhost:0")
+	req := httptest.NewRequest(http.MethodGet, "/api/sidebar-layout", nil)
+	rr := httptest.NewRecorder()
+	h(rr, req)
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("want 204, got %d body=%q", rr.Code, rr.Body.String())
+	}
+}
+
+func TestSidebarLayoutPutThenGetRoundtrip(t *testing.T) {
+	dir := withTempXDG(t)
+	h := handleSidebarLayout("127.0.0.1:0", "localhost:0")
+
+	payload := []byte(`{"version":1,"order":["grp:a1","c3x"],"groups":[{"id":"a1","name":"proj","collapsed":false,"memberOrder":["c3y"]}]}`)
+	put := httptest.NewRequest(http.MethodPut, "/api/sidebar-layout", bytes.NewReader(payload))
+	put.Header.Set("Content-Type", "application/json")
+	rrPut := httptest.NewRecorder()
+	h(rrPut, put)
+	if rrPut.Code != http.StatusNoContent {
+		t.Fatalf("PUT: want 204, got %d body=%q", rrPut.Code, rrPut.Body.String())
+	}
+
+	// Written to sidebar-layout.json — NOT layout.json (the two must not share).
+	wantPath := filepath.Join(dir, "c3", "sidebar-layout.json")
+	got, err := os.ReadFile(wantPath)
+	if err != nil {
+		t.Fatalf("read written file: %v", err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("on-disk mismatch:\ngot:  %s\nwant: %s", got, payload)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "c3", "layout.json")); !os.IsNotExist(err) {
+		t.Fatalf("sidebar PUT must not touch layout.json (err=%v)", err)
+	}
+
+	get := httptest.NewRequest(http.MethodGet, "/api/sidebar-layout", nil)
+	rrGet := httptest.NewRecorder()
+	h(rrGet, get)
+	if rrGet.Code != http.StatusOK || !bytes.Equal(rrGet.Body.Bytes(), payload) {
+		t.Fatalf("GET roundtrip mismatch: code=%d body=%q", rrGet.Code, rrGet.Body.Bytes())
+	}
+}
+
 func TestLayoutDisallowedMethod(t *testing.T) {
 	withTempXDG(t)
 	h := handleLayout("127.0.0.1:0", "localhost:0")

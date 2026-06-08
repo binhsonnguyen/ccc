@@ -71,6 +71,16 @@ interface Props {
   bellSet?: Set<string>;
   // c3Id → exitCode for panes that have exited and are still open.
   exitMap?: Map<string, number>;
+  // App reports each session it just created (Claude main-pane flow + split)
+  // so the sidebar can drop the new session into the same group as the
+  // session that was active when creation started (originC3Id). A fresh
+  // object on every create — the effect keys off identity. Sidebar-initiated
+  // shell/bind creations are placed directly in their onCreated and don't go
+  // through this prop.
+  lastCreated?: { id: string; originC3Id: string | null } | null;
+  // Palette "Groups" entry asks the sidebar to reveal a group: expand it if
+  // collapsed and scroll its header into view. Nonce distinguishes repeats.
+  revealGroup?: { id: string; n: number } | null;
 }
 
 const SIDEBAR_W_MIN = 200;
@@ -277,6 +287,46 @@ function newGroupRawId(): string {
   return Math.random().toString(36).slice(2, 10);
 }
 
+// Rollup status for a collapsed group header. Mirrors the per-row priority
+// (attention > exit > running > pending) but aggregated over members: the
+// header shows the single highest-priority signal present among them, so a
+// collapsed group isn't a status blind spot. Only `attn` can short-circuit —
+// it's the top tier, so a bell on any member wins regardless of the others;
+// every lower tier must scan all members first (a later member could still
+// hold a higher signal). 'open' is intentionally omitted — "open in a tab" is
+// a per-row UI fact, not a member-health signal worth surfacing on the header.
+type GroupRollup = 'attn' | 'exit-err' | 'exit-ok' | 'warm' | 'pending' | null;
+
+function groupStatusRollup(
+  members: C3Entry[],
+  bellSet: Set<string> | undefined,
+  exitMap: Map<string, number> | undefined,
+): GroupRollup {
+  let attn = false;
+  let exitErr = false;
+  let exitOk = false;
+  let warm = false;
+  let pending = false;
+  for (const s of members) {
+    if (bellSet?.has(s.id)) attn = true;
+    const code = exitMap?.get(s.id);
+    if (code !== undefined) {
+      if (code !== 0) exitErr = true;
+      else exitOk = true;
+    }
+    // Same pending test as renderSessionRow: shell tabs are never pending.
+    const isPending = !s.claudeUuid && s.kind !== 'shell';
+    if (s.live && !isPending) warm = true;
+    if (isPending) pending = true;
+  }
+  if (attn) return 'attn';
+  if (exitErr) return 'exit-err';
+  if (exitOk) return 'exit-ok';
+  if (warm) return 'warm';
+  if (pending) return 'pending';
+  return null;
+}
+
 export default function Sidebar({
   sessions,
   activeC3Id,
@@ -298,6 +348,8 @@ export default function Sidebar({
   resizable,
   bellSet,
   exitMap,
+  lastCreated,
+  revealGroup,
 }: Props) {
   // Resize drag state. We don't put `dragging` in React state (would
   // rerender on every mouse move); we mark the DOM with a class for the
@@ -307,6 +359,10 @@ export default function Sidebar({
 
   // Sidebar layout (order, groups). Persisted to localStorage.
   const [layout, setLayout] = useSidebarLayout();
+  // Mirror of the latest layout for use inside async callbacks (doRemove)
+  // whose closures would otherwise capture a stale `layout` after an await.
+  const layoutRef = useRef(layout);
+  layoutRef.current = layout;
 
   // Small counter used only to force a re-render after drag commit/cancel
   // without putting drag state in React state (avoids mousemove thrash).
@@ -404,6 +460,57 @@ export default function Sidebar({
       setLayout(newLayout);
     },
     [layout, setLayout],
+  );
+
+  // Drop a permanently-removed session from the layout: prune it from the
+  // top-level order and from every group's memberOrder. Called only on real
+  // delete (removeSession) — NOT on archive, where membership is preserved so
+  // unarchive restores the session to its group. Empty groups are kept: an
+  // empty group is a valid, intentional state (createGroup allows it, and the
+  // group-empty placeholder gives it a drop target). Reads layoutRef so it's
+  // correct when invoked after an await in doRemove.
+  const forgetSession = useCallback(
+    (c3Id: string) => {
+      const cur = layoutRef.current;
+      const inOrder = cur.order.includes(c3Id);
+      const inGroup = cur.groups.some((g) => g.memberOrder.includes(c3Id));
+      if (!inOrder && !inGroup) return; // nothing to prune — skip the write
+      setLayout({
+        ...cur,
+        order: cur.order.filter((s) => s !== c3Id),
+        groups: cur.groups.map((g) => ({
+          ...g,
+          memberOrder: g.memberOrder.filter((id) => id !== c3Id),
+        })),
+      });
+    },
+    [setLayout],
+  );
+
+  // Place a freshly-created session into the group of the session that was
+  // active when creation started (originC3Id), so "new session while working
+  // in a group" lands in that group instead of ungrouped. No-op when the
+  // origin is ungrouped/unknown, or when the new session is somehow already
+  // grouped (don't override an explicit placement). Reads layoutRef so it's
+  // correct from an effect that may fire a tick after the create resolves.
+  const placeNewSession = useCallback(
+    (newId: string, originC3Id: string | null) => {
+      if (!originC3Id || newId === originC3Id) return;
+      const cur = layoutRef.current;
+      const target = cur.groups.find((g) => g.memberOrder.includes(originC3Id));
+      if (!target) return; // origin is ungrouped — leave new session ungrouped
+      if (cur.groups.some((g) => g.memberOrder.includes(newId))) return; // already placed
+      setLayout({
+        ...cur,
+        order: cur.order.filter((s) => s !== newId),
+        groups: cur.groups.map((g) =>
+          g.id === target.id
+            ? { ...g, memberOrder: [...g.memberOrder, newId] }
+            : g,
+        ),
+      });
+    },
+    [setLayout],
   );
 
   const createGroup = useCallback(
@@ -655,6 +762,43 @@ export default function Sidebar({
     if (onRequestCreate) return;
     if (openNewSessionTick !== undefined) setCreating(true);
   }, [openNewSessionTick, onRequestCreate]);
+
+  // App-driven session creations (Claude main-pane flow + split) inherit the
+  // active session's group. lastCreated is a fresh object per create, so this
+  // fires once each. Sidebar-initiated shell/bind creations place directly in
+  // their onCreated and never set this prop.
+  useEffect(() => {
+    if (lastCreated) placeNewSession(lastCreated.id, lastCreated.originC3Id);
+  }, [lastCreated, placeNewSession]);
+
+  // Reveal a group on request from the palette: expand it (if collapsed) then
+  // scroll its header into view. Expand and scroll are split across a frame so
+  // the (possibly newly-expanded) header exists in the DOM before we scroll.
+  useEffect(() => {
+    if (!revealGroup) return;
+    const gid = revealGroup.id;
+    const cur = layoutRef.current;
+    const g = cur.groups.find((x) => x.id === gid);
+    if (!g) return;
+    // Clear any active text filter first: filtered mode renders a flat list
+    // with no group headers, so the scroll/focus target below wouldn't exist.
+    setFilter('');
+    if (g.collapsed) {
+      setLayout({
+        ...cur,
+        groups: cur.groups.map((x) =>
+          x.id === gid ? { ...x, collapsed: false } : x,
+        ),
+      });
+    }
+    requestAnimationFrame(() => {
+      const el = sessionListRef.current?.querySelector<HTMLElement>(
+        `li.session-group-header[data-group-id="${gid}"]`,
+      );
+      el?.scrollIntoView({ block: 'nearest' });
+      el?.focus?.();
+    });
+  }, [revealGroup, setLayout, setFilter]);
   const rowRefs = useRef<Map<string, HTMLLIElement | null>>(new Map());
 
   // C-2 hover preview state. Two timers: hoverTimer fires the fetch
@@ -847,6 +991,8 @@ export default function Sidebar({
         showToast(`Removed ${s.name || s.id}`, { variant: 'info' });
         // Close any open pane attached to this session's c3Id.
         onCloseTabFor(s.id);
+        // Prune the gone session from the sidebar layout (order + groups).
+        forgetSession(s.id);
         onAfterMutate();
       } catch (err) {
         if (err instanceof ApiError && err.status === 409) {
@@ -857,6 +1003,8 @@ export default function Sidebar({
             showToast(`Removed ${s.name || s.id} (force)`, { variant: 'warning' });
             // Close any open pane attached to this session's c3Id.
             onCloseTabFor(s.id);
+            // Prune the gone session from the sidebar layout (order + groups).
+            forgetSession(s.id);
             onAfterMutate();
             return;
           } catch (err2) {
@@ -869,7 +1017,7 @@ export default function Sidebar({
         showToast(msg, { variant: 'error' });
       }
     },
-    [onAfterMutate, onCloseTabFor, showToast],
+    [onAfterMutate, onCloseTabFor, showToast, forgetSession],
   );
 
   const startRename = useCallback((s: C3Entry) => {
@@ -2070,7 +2218,12 @@ export default function Sidebar({
 
   // ---- group header renderer ---------------------------------------------
 
-  const renderGroupHeader = (g: SidebarGroup, memberCount: number) => {
+  const renderGroupHeader = (g: SidebarGroup, members: C3Entry[]) => {
+    const memberCount = members.length;
+    // Aggregate member status onto the header, but only when collapsed —
+    // expanded groups already show each member's own indicator, so a header
+    // rollup would be redundant noise.
+    const rollup = g.collapsed ? groupStatusRollup(members, bellSet, exitMap) : null;
     const isRenaming = renamingGroupId === g.id;
     const isArmed = armedGroupId === g.id;
     const isDraggingThis =
@@ -2143,6 +2296,43 @@ export default function Sidebar({
         {g.collapsed && memberCount > 0 && (
           <span className="group-count">({memberCount})</span>
         )}
+        {rollup === 'attn' ? (
+          <span
+            className="sidebar-attn-dot"
+            aria-label="A session in this group is waiting for input"
+            title="A session in this group is waiting for input"
+          />
+        ) : rollup === 'exit-err' ? (
+          <span
+            className="sidebar-exit-err"
+            aria-label="A session in this group exited with an error"
+            title="A session in this group exited with an error"
+          >
+            ✗
+          </span>
+        ) : rollup === 'exit-ok' ? (
+          <span
+            className="sidebar-exit-ok"
+            aria-label="A session in this group exited"
+            title="A session in this group exited"
+          >
+            ✓
+          </span>
+        ) : rollup === 'warm' ? (
+          <span
+            className="sidebar-warm-dot"
+            aria-label="A session in this group is running in the background"
+            title="A session in this group is running in the background"
+          />
+        ) : rollup === 'pending' ? (
+          <span
+            className="sidebar-pending-indicator"
+            aria-label="A session in this group is initializing"
+            title="A session in this group is initializing…"
+          >
+            …
+          </span>
+        ) : null}
         <button
           className={'group-delete-btn' + (isArmed ? ' armed' : '')}
           onClick={(e) => {
@@ -2347,6 +2537,10 @@ export default function Sidebar({
             onCancel={() => setCreating(false)}
             onCreated={(entry) => {
               setCreating(false);
+              // Inherit the active session's group before opening (onOpen
+              // changes the active session). activeC3Id is still the
+              // pre-create active row here since the form lives in the sidebar.
+              placeNewSession(entry.id, activeC3Id);
               onAfterMutate();
               // Auto-open the new entry's tab if it already has a uuid;
               // pending entries (uuid empty) will spawn-on-attach.
@@ -2366,6 +2560,7 @@ export default function Sidebar({
           onCancel={() => setCreating(false)}
           onCreated={(entry) => {
             setCreating(false);
+            placeNewSession(entry.id, activeC3Id);
             onAfterMutate();
             onOpen(entry);
           }}
@@ -2404,7 +2599,7 @@ export default function Sidebar({
             : // No filter: render mixed items (groups + ungrouped)
               (renderItems ?? []).map((item) => {
                 if (item.type === 'group') {
-                  return renderGroupHeader(item.group, item.members.length);
+                  return renderGroupHeader(item.group, item.members);
                 }
                 if (item.type === 'group-empty') {
                   return (

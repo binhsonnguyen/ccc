@@ -221,6 +221,28 @@ export async function uploadImages(c3Id: string, files: File[]): Promise<string[
   return j?.paths ?? [];
 }
 
+// Sidebar layout (session order + channel groups) sidecar. The server stores
+// it opaquely at sidebar-layout.json; schema lives in sidebarLayout.ts. GET
+// returns the stored JSON, or null when the server has nothing yet (204).
+export async function getSidebarLayout(): Promise<unknown | null> {
+  const r = await fetch('/api/sidebar-layout');
+  if (r.status === 204) return null;
+  if (!r.ok) throw new Error(`GET /api/sidebar-layout: ${r.status}`);
+  return await r.json();
+}
+
+// putSidebarLayout persists the layout. Same-origin guarded server-side; the
+// JSON content-type header is what makes the browser send Origin so the guard
+// passes. Body is capped at 64 KiB by the server.
+export async function putSidebarLayout(layout: unknown): Promise<void> {
+  const r = await fetch('/api/sidebar-layout', {
+    method: 'PUT',
+    headers: JSON_HEADERS,
+    body: JSON.stringify(layout),
+  });
+  if (!r.ok) throw new Error(`PUT /api/sidebar-layout: ${r.status}`);
+}
+
 export function ptyWsURL(c3Id: string): string {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${proto}//${location.host}/api/sessions/${encodeURIComponent(c3Id)}/pty`;

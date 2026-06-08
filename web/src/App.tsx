@@ -155,11 +155,24 @@ function AppInner() {
 
   const [view, setView] = useState<SidebarView>('active');
   const [paletteOpen, setPaletteOpen] = useState(false);
+  // Signal to the sidebar to reveal (expand + scroll to) a group, fired from
+  // the palette's Groups section. The nonce makes repeat reveals of the same
+  // group distinct objects so the sidebar effect re-runs each time.
+  const revealNonceRef = useRef(0);
+  const [revealGroupSig, setRevealGroupSig] =
+    useState<{ id: string; n: number } | null>(null);
   const [cheatsheetOpen, setCheatsheetOpen] = useState(false);
   const [openNewSessionTick] = useState(0);
   const [creatingSession, setCreatingSession] = useState(false);
   const [paneFlashKey, setPaneFlashKey] = useState(0);
+  // c3Id of the session active when a creation was initiated. Captured here
+  // (startCreatingSession blanks activeTabId), then reported via lastCreated
+  // so the sidebar can drop the new session into the origin's group.
+  const creationOriginRef = useRef<string | null>(null);
+  const [lastCreated, setLastCreated] =
+    useState<{ id: string; originC3Id: string | null } | null>(null);
   const startCreatingSession = useCallback(() => {
+    creationOriginRef.current = activeC3IdRef.current;
     setCreatingSession((wasOpen) => {
       if (wasOpen) {
         setPaneFlashKey((k) => k + 1);
@@ -737,6 +750,8 @@ function AppInner() {
           name,
           kind: kind === 'shell' ? 'shell' : undefined,
         });
+        // Split session inherits the split origin pane's group in the sidebar.
+        setLastCreated({ id: entry.id, originC3Id: primaryPane(tab).c3Id });
         setTabs((prev) =>
           prev.map((t) => {
             if (t.id !== activeTabId) return t;
@@ -851,6 +866,11 @@ function AppInner() {
     copyCwd,
     openCheatsheet,
     setTheme: onThemeChange,
+    revealGroup: (groupId: string) => {
+      setSidebarOpen(true);
+      revealNonceRef.current += 1;
+      setRevealGroupSig({ id: groupId, n: revealNonceRef.current });
+    },
   };
 
   const appClass =
@@ -862,6 +882,10 @@ function AppInner() {
 
   const activeTab = tabs.find((t) => t.id === activeTabId) ?? null;
   const activeC3Id = activeTab ? focusedPane(activeTab).c3Id : null;
+  // Mirror for callbacks (startCreatingSession) that need the active c3Id
+  // without taking it as a dependency / before activeTabId is blanked.
+  const activeC3IdRef = useRef<string | null>(activeC3Id);
+  activeC3IdRef.current = activeC3Id;
   const activePane: Pane | null = activeTab ? focusedPane(activeTab) : null;
 
   // Map c3Id → exitCode for all panes that have exited and are still open.
@@ -947,6 +971,8 @@ function AppInner() {
           onCloseMainPane={() => setCreatingSession(false)}
           bellSet={bellSet}
           exitMap={exitMap}
+          lastCreated={lastCreated}
+          revealGroup={revealGroupSig}
         />
       </div>
       <main className="workspace">
@@ -967,6 +993,8 @@ function AppInner() {
             <>
               <NewSessionPane
                 onCreated={(entry) => {
+                  setLastCreated({ id: entry.id, originC3Id: creationOriginRef.current });
+                  creationOriginRef.current = null;
                   openTab(entry);
                   setCreatingSession(false);
                 }}

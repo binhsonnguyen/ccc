@@ -140,6 +140,7 @@ func run() error {
 	mux.HandleFunc("/api/sessions/", routeSession(originHost, originHostAlt))
 	mux.HandleFunc("/api/claude-sessions", handleClaudeSessions)
 	mux.HandleFunc("/api/layout", handleLayout(originHost, originHostAlt))
+	mux.HandleFunc("/api/sidebar-layout", handleSidebarLayout(originHost, originHostAlt))
 	mux.HandleFunc("/assets/", handleAssets)
 	mux.HandleFunc("/", handleIndex)
 
@@ -1057,35 +1058,62 @@ func writePortFile(path string, port int) error {
 const layoutMaxBytes = 64 * 1024
 
 func layoutFilePath() (string, error) {
+	return dataFilePath("layout.json")
+}
+
+// sidebarLayoutFilePath is the sidecar for the sidebar's session ordering and
+// channel grouping (web/src/lib/sidebarLayout.ts owns the schema). It's kept
+// separate from layout.json — that file holds the split-panel/tab layout and
+// has a different schema + a different writer, so sharing one file would let
+// the two clobber each other.
+func sidebarLayoutFilePath() (string, error) {
+	return dataFilePath("sidebar-layout.json")
+}
+
+func dataFilePath(name string) (string, error) {
 	if d := os.Getenv("XDG_DATA_HOME"); d != "" {
-		return filepath.Join(d, "c3", "layout.json"), nil
+		return filepath.Join(d, "c3", name), nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".local", "share", "c3", "layout.json"), nil
+	return filepath.Join(home, ".local", "share", "c3", name), nil
 }
 
 func handleLayout(originHost, originHostAlt string) http.HandlerFunc {
+	return jsonFileHandler(layoutFilePath, originHost, originHostAlt)
+}
+
+func handleSidebarLayout(originHost, originHostAlt string) http.HandlerFunc {
+	return jsonFileHandler(sidebarLayoutFilePath, originHost, originHostAlt)
+}
+
+// jsonFileHandler serves an opaque JSON sidecar file: GET returns the stored
+// body (204 when absent/empty), PUT atomically replaces it (same-origin only,
+// 64 KiB cap, must parse as a JSON object). The server never validates the
+// schema — the client owns it — so a new field never needs a server change.
+// Concurrent PUTs from multiple browser windows are last-writer-wins; the
+// atomic temp+rename guarantees no torn read, but there is no merge.
+func jsonFileHandler(pathFn func() (string, error), originHost, originHostAlt string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
-			handleLayoutGet(w, r)
+			handleLayoutGet(w, r, pathFn)
 		case http.MethodPut:
 			if !checkSameOrigin(w, r, originHost, originHostAlt) {
 				return
 			}
-			handleLayoutPut(w, r)
+			handleLayoutPut(w, r, pathFn)
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
 	}
 }
 
-func handleLayoutGet(w http.ResponseWriter, r *http.Request) {
+func handleLayoutGet(w http.ResponseWriter, r *http.Request, pathFn func() (string, error)) {
 	_ = r
-	path, err := layoutFilePath()
+	path, err := pathFn()
 	if err != nil {
 		httpError(w, err, http.StatusInternalServerError)
 		return
@@ -1108,7 +1136,7 @@ func handleLayoutGet(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(b)
 }
 
-func handleLayoutPut(w http.ResponseWriter, r *http.Request) {
+func handleLayoutPut(w http.ResponseWriter, r *http.Request, pathFn func() (string, error)) {
 	r.Body = http.MaxBytesReader(w, r.Body, int64(layoutMaxBytes))
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -1134,7 +1162,7 @@ func handleLayoutPut(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid json: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	path, err := layoutFilePath()
+	path, err := pathFn()
 	if err != nil {
 		httpError(w, err, http.StatusInternalServerError)
 		return
@@ -1147,7 +1175,7 @@ func handleLayoutPut(w http.ResponseWriter, r *http.Request) {
 	// POSIX gives us "either the old file or the new file" — never a
 	// truncated half-write — so concurrent GETs from another browser
 	// window can't observe partial JSON.
-	tmp, err := os.CreateTemp(filepath.Dir(path), "layout-*.tmp")
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+"-*.tmp")
 	if err != nil {
 		httpError(w, err, http.StatusInternalServerError)
 		return
