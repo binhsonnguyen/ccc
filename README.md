@@ -41,23 +41,29 @@ c3-bin shell-init fish | source
 (`c3` has to be a shell function — it `cd`s and runs `claude` in *your*
 shell — so `c3-bin` emits the wrapper for you to `eval`.)
 
+**Install script (Linux, or macOS without Homebrew):**
+
+Fetches the prebuilt binaries for your OS/arch from the latest release —
+no Go, no Homebrew:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/binhsonnguyen/ccc/main/install.sh | bash
+```
+
+Pin a version with `C3_VERSION=vX.Y.Z` or change the target with
+`INSTALL_DIR=…` (default `~/.local/bin`).
+
 **From source:**
 
 ```sh
-./install.sh        # or: make install
+git clone https://github.com/binhsonnguyen/ccc && cd ccc && make install
 ```
 
-Builds `c3-bin` and `c3-server` into `~/.local/bin` and (for fish
-users) drops a function into `~/.config/fish/functions/`. For
-bash/zsh, the installer prints the one line to add to your rc:
+Builds `c3-bin` + `c3-server` into `~/.local/bin` (needs Go 1.26+).
 
-```sh
-source /path/to/ccc/shell/c3.sh
-```
-
-Building from source needs Go 1.26+; both install paths need
-[`fzf`](https://github.com/junegunn/fzf) and (for the GUI) `claude`
-itself in `$PATH`.
+Every non-Homebrew install needs [`fzf`](https://github.com/junegunn/fzf)
+(the picker) and, for the GUI, `claude` in `$PATH`; then enable the `c3`
+command exactly as shown above (`eval "$(c3-bin shell-init zsh)"`).
 
 **Optional — auto-start server:** to keep `c3-server` running in the
 background (so `c3 gui` opens instantly without spawning anything), run
