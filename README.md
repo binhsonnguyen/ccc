@@ -19,17 +19,27 @@ all stays in `~/.claude/projects/**`. You can stop using c3 and
 
 ## Install
 
-**Homebrew (macOS, Linux):**
+**Homebrew (macOS):**
 
 ```sh
 brew install binhsonnguyen/tap/c3
 ```
 
-Then add to your shell rc (bash/zsh only; fish auto-loads):
+(c3 ships as a Homebrew **cask**, which Homebrew only supports on macOS.
+On Linux, install from source / the release tarball — see below.)
+
+Then enable the `c3` command in your shell rc:
 
 ```sh
-source "$(brew --prefix)/etc/c3/c3.sh"
+# bash/zsh (~/.bashrc, ~/.zshrc):
+eval "$(c3-bin shell-init zsh)"
+
+# fish (~/.config/fish/config.fish):
+c3-bin shell-init fish | source
 ```
+
+(`c3` has to be a shell function — it `cd`s and runs `claude` in *your*
+shell — so `c3-bin` emits the wrapper for you to `eval`.)
 
 **From source:**
 
@@ -49,16 +59,16 @@ Building from source needs Go 1.26+; both install paths need
 [`fzf`](https://github.com/junegunn/fzf) and (for the GUI) `claude`
 itself in `$PATH`.
 
-**Optional — auto-start server:** if you installed via brew and
-want `c3 gui` to open the browser instantly without spawning
-anything, run
+**Optional — auto-start server:** to keep `c3-server` running in the
+background (so `c3 gui` opens instantly without spawning anything), run
 
 ```sh
-brew services start c3
+c3 service start        # status: c3 service status · stop: c3 service stop
 ```
 
-to keep `c3-server` running in the background (idle auto-shutdown
-is disabled in service mode).
+This installs a LaunchAgent (macOS) or systemd `--user` unit (Linux)
+with idle auto-shutdown disabled. It works the same whether you
+installed via brew or from source.
 
 **Installed vs source builds.** The installer bakes a **fixed port
 7755** into c3-server (via `-ldflags`) so the GUI URL stays

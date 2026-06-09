@@ -68,60 +68,66 @@ changelog:
       - "^chore:"
       - "^Merge "
 
-brews:
+# Homebrew Cask. GoReleaser fully deprecated `brews` (binary-install
+# formulas) in v2.16; casks are the supported path for pre-compiled
+# binaries. Two things the old formula did don't exist for casks and are
+# handled in the app instead:
+#   - the `c3` shell function: shipped via `c3-bin shell-init <shell>`
+#     (see caveats) instead of installing shell files into the prefix;
+#   - the always-on server: `c3 service {start|stop|status}` writes a
+#     LaunchAgent (macOS) / systemd --user unit (Linux), replacing the
+#     formula-only `brew services` integration.
+# Existing formula users auto-migrate via tap_migrations.json in the tap
+# repo (Homebrew >= 5.0.0, Nov 2025). See docs/RELEASE.md.
+homebrew_casks:
   - name: c3
     repository:
       owner: binhsonnguyen
       name: homebrew-tap
       branch: main
-    directory: Formula
     homepage: "https://github.com/binhsonnguyen/ccc"
     description: "Personal Claude Code session manager — CLI + web GUI"
-    license: "MIT"
-    # fzf powers the c3 picker; claude is recommended but not strictly a
-    # build dep, so left out of dependencies (most users have it already
-    # if they want c3).
+    # fzf powers the c3 picker; claude is a runtime prereq but not a brew
+    # package, so it's left to the user.
     dependencies:
-      - name: fzf
-    install: |
-      bin.install "c3-bin"
-      bin.install "c3-server"
-      (etc/"c3").install "shell/c3.sh"
-      # share/fish/vendor_functions.d resolves to fish's auto-load
-      # path under HOMEBREW_PREFIX. fish_function_path DSL is not in
-      # scope inside the per-arch define_method(:install) blocks
-      # goreleaser generates, so we hand-roll the path.
-      (share/"fish/vendor_functions.d").install "shell/c3.fish"
+      - formula: fzf
+    binaries:
+      - c3-bin
+      - c3-server
+    # The release binaries are unsigned; strip the quarantine bit on install
+    # so Gatekeeper doesn't block them. Third-party tap → this is allowed and
+    # is the documented alternative to code signing.
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr",
+              args: ["-dr", "com.apple.quarantine", "#{staged_path}/c3-bin", "#{staged_path}/c3-server"]
+          end
     caveats: |
-      To enable the `c3` command in bash/zsh, add to your shell rc:
+      Enable the `c3` command in your shell rc:
 
-        source "$(brew --prefix)/etc/c3/c3.sh"
+        bash/zsh:  eval "$(c3-bin shell-init zsh)"
+        fish:      c3-bin shell-init fish | source
 
-      Fish users: the function is auto-loaded.
+      The GUI server listens on 127.0.0.1:7755 by default. Override with
+      C3_SERVER_PORT=N (or =0 for a random port).
 
-      The GUI server listens on 127.0.0.1:7755 by default. Override
-      with C3_SERVER_PORT=N (or =0 for a random port).
+      Run it always-on in the background (replaces `brew services start c3`):
 
-      Optional: run c3-server in the background via brew services so
-      `c3 gui` opens the browser instantly without spawning anything:
-
-        brew services start c3
-
-      (Service mode disables the idle auto-shutdown.)
-    # brew services integration. Goreleaser renders this as the
-    # formula's `service do ... end` block, which brew translates to a
-    # launchd plist on macOS / systemd unit on Linux.
-    service: |
-      run [opt_bin/"c3-server"]
-      keep_alive true
-      log_path var/"log/c3-server.log"
-      error_log_path var/"log/c3-server.log"
-      # Idle shutdown makes sense when c3 gui spawns the server on
-      # demand, but defeats the point of running as a service.
-      environment_variables C3_SERVER_IDLE_MINUTES: "0"
-    test: |
-      system "#{bin}/c3-bin", "--version"
-      system "#{bin}/c3-server", "--version"
+        c3 service start        # stop with: c3 service stop
+    # Opt-in cleanup on `brew uninstall --zap`. Only c3's OWN metadata +
+    # the service unit — never claude's session files (those live in
+    # ~/.claude and are not c3's to remove).
+    zap:
+      # Boot the LaunchAgent out before deleting its plist, so --zap doesn't
+      # leave an orphaned (respawning) job pointing at a removed binary.
+      launchctl:
+        - com.c3.server
+      trash:
+        - "~/.local/share/c3"
+        - "~/.local/state/c3"
+        - "~/Library/LaunchAgents/com.c3.server.plist"
 
 release:
   github:
