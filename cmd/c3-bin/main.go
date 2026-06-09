@@ -35,13 +35,19 @@ Usage:
   c3 rm <id>          remove c3-session entry (Claude session left intact)
   c3 gui              open the local web UI in your browser (spawns
                         c3-server detached if not already running)
+  c3 service <cmd>    manage the always-on c3-server background service
+                        (start | stop | status); LaunchAgent on macOS,
+                        systemd --user on Linux
+  c3 shell-init <sh>  print the shell wrapper for bash|zsh|fish, e.g.
+                        eval "$(c3-bin shell-init zsh)"
   c3 -h, --help       show this help
   c3 -v, --version    show version
 
 Environment:
   C3_NO_WRAPPER=1     also echo eval'd command to stderr
   C3_SERVER_PORT=N    c3-server listen port (default 7755; 0 = random)
-  C3_SERVER_IDLE_MINUTES=N  shut server down after N min idle (default 15, 0 = off)
+  C3_SERVER_IDLE_MINUTES=N  shut server down after N min idle (default 15,
+                            0 = off; "c3 service" forces 0)
 `
 
 var store = archivejson.New()
@@ -91,6 +97,10 @@ func run(args []string) error {
 		return cmdPickerAction(args[1:])
 	case "gui":
 		return cmdGUI()
+	case "service":
+		return cmdService(args[1:])
+	case "shell-init":
+		return cmdShellInit(args[1:])
 	}
 	q := strings.Join(args, " ")
 	return runPicker(picker.Options{Query: q}, false)
