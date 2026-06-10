@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import SessionRowMenu, { type MenuItem } from './SessionRowMenu';
 import NewSessionForm from './NewSessionForm';
 import SessionPreview from './SessionPreview';
@@ -414,6 +414,23 @@ export default function Sidebar({
     y: number;
   }
   const [moveGroupPopover, setMoveGroupPopover] = useState<MoveGroupPopover | null>(null);
+  const movePopoverRef = useRef<HTMLDivElement | null>(null);
+
+  // Clamp the move-to-group popover into the viewport once it's measurable.
+  // The anchor (x,y) is the row's right edge, so a row near the bottom would
+  // push the popover off-screen. We set left/top imperatively (not via the
+  // React style prop) so an unrelated re-render — e.g. the 2s activity poll —
+  // can't reset the position back to the unclamped anchor.
+  useLayoutEffect(() => {
+    const el = movePopoverRef.current;
+    if (!moveGroupPopover || !el) return;
+    const r = el.getBoundingClientRect();
+    const m = 8; // viewport margin
+    const left = Math.max(m, Math.min(moveGroupPopover.x, window.innerWidth - r.width - m));
+    const top = Math.max(m, Math.min(moveGroupPopover.y, window.innerHeight - r.height - m));
+    el.style.left = `${left}px`;
+    el.style.top = `${top}px`;
+  }, [moveGroupPopover]);
 
   // ---- Phase 2: group helpers ---------------------------------------------
 
@@ -1055,6 +1072,17 @@ export default function Sidebar({
       const pending = !s.claudeUuid && s.kind !== 'shell';
       const archived = view === 'archived';
       const currentGroup = findGroupOf(s.id);
+      // Anchor the move-to-group popover to the row's right edge; the popover
+      // itself clamps into the viewport (see the useLayoutEffect below).
+      const openMovePopover = () => {
+        const el = rowRefs.current.get(s.id);
+        const rect = el?.getBoundingClientRect();
+        setMoveGroupPopover({
+          sessionId: s.id,
+          x: rect ? rect.right + 4 : 200,
+          y: rect ? rect.top : 200,
+        });
+      };
       return [
         {
           id: 'open',
@@ -1092,26 +1120,21 @@ export default function Sidebar({
           onClick: () => void doRemove(s),
         },
         { id: 'sep1', label: '', separator: true },
-        // Phase 2: group membership
+        // Phase 2: group membership. "Move to group…" is always available
+        // (moveToGroup re-homes a session even if it's already grouped); when
+        // it IS in a group we additionally offer "Remove from group".
+        {
+          id: 'move-group' as const,
+          label: currentGroup ? 'Move to another group…' : 'Move to group…',
+          onClick: openMovePopover,
+        },
         ...(currentGroup
           ? [{
               id: 'ungroup' as const,
               label: 'Remove from group',
               onClick: () => removeFromGroup(s.id),
             }]
-          : [{
-              id: 'move-group' as const,
-              label: 'Move to group…',
-              onClick: (_e?: React.MouseEvent) => {
-                const el = rowRefs.current.get(s.id);
-                const rect = el?.getBoundingClientRect();
-                setMoveGroupPopover({
-                  sessionId: s.id,
-                  x: rect ? rect.right + 4 : 200,
-                  y: rect ? rect.top : 200,
-                });
-              },
-            }]),
+          : []),
         { id: 'sep2', label: '', separator: true },
         // Copy uuid is hidden (not disabled) for shell rows — shell tabs
         // never have a Claude uuid by design, so there's no future state
@@ -2722,10 +2745,14 @@ export default function Sidebar({
             onClick={() => setMoveGroupPopover(null)}
           />
           <div
+            ref={movePopoverRef}
             className="move-group-popover"
-            style={{ left: moveGroupPopover.x, top: moveGroupPopover.y }}
           >
-            {layout.groups.map((g) => (
+            {/* Exclude the group the session is already in — moving it there
+                would be a no-op. */}
+            {layout.groups
+              .filter((g) => !g.memberOrder.includes(moveGroupPopover.sessionId))
+              .map((g) => (
               <button
                 key={g.id}
                 className="move-group-popover-item"
