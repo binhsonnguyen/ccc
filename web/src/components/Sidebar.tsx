@@ -72,12 +72,13 @@ interface Props {
   // c3Id → exitCode for panes that have exited and are still open.
   exitMap?: Map<string, number>;
   // App reports each session it just created (Claude main-pane flow + split)
-  // so the sidebar can drop the new session into the same group as the
-  // session that was active when creation started (originC3Id). A fresh
-  // object on every create — the effect keys off identity. Sidebar-initiated
-  // shell/bind creations are placed directly in their onCreated and don't go
-  // through this prop.
-  lastCreated?: { id: string; originC3Id: string | null } | null;
+  // so the sidebar can drop the new session into the chosen group (groupId;
+  // null = ungrouped). The Claude pane's dropdown defaults to the focused
+  // group, so the implicit inherit still happens; split has no form and just
+  // inherits the origin pane's group. A fresh object on every create — the
+  // effect keys off identity. Sidebar-initiated shell/bind creations place
+  // directly in their onCreated and don't go through this prop.
+  lastCreated?: { id: string; groupId: string | null } | null;
   // Palette "Groups" entry asks the sidebar to reveal a group: expand it if
   // collapsed and scroll its header into view. Nonce distinguishes repeats.
   revealGroup?: { id: string; n: number } | null;
@@ -504,26 +505,30 @@ export default function Sidebar({
     [setLayout],
   );
 
-  // Place a freshly-created session into the group of the session that was
-  // active when creation started (originC3Id), so "new session while working
-  // in a group" lands in that group instead of ungrouped. No-op when the
-  // origin is ungrouped/unknown, or when the new session is somehow already
-  // grouped (don't override an explicit placement). Reads layoutRef so it's
-  // correct from an effect that may fire a tick after the create resolves.
-  const placeNewSession = useCallback(
-    (newId: string, originC3Id: string | null) => {
-      if (!originC3Id || newId === originC3Id) return;
+  // Place a freshly-created session into the chosen group. groupId comes from
+  // the new-session form's dropdown (default = the focused session's group, so
+  // "new session while working in a group" still lands there). null leaves it
+  // ungrouped (no-op — a brand-new session is ungrouped already). No-op too
+  // when the group is gone (stale) or the session is already in it. Reads
+  // layoutRef so it's correct from an effect that fires a tick after create.
+  const placeNewSessionInGroup = useCallback(
+    (newId: string, groupId: string | null) => {
+      if (!groupId) return;
       const cur = layoutRef.current;
-      const target = cur.groups.find((g) => g.memberOrder.includes(originC3Id));
-      if (!target) return; // origin is ungrouped — leave new session ungrouped
-      if (cur.groups.some((g) => g.memberOrder.includes(newId))) return; // already placed
+      const target = cur.groups.find((g) => g.id === groupId);
+      if (!target) return; // stale group id
+      if (target.memberOrder.includes(newId)) return; // already placed
+      // Strip newId from top-level order AND any other group before appending,
+      // so a session can never end up in two groups at once. (Today's callers
+      // only pass brand-new ungrouped ids, but this keeps the helper safe for
+      // any future re-home caller — mirrors moveToGroup.)
       setLayout({
         ...cur,
         order: cur.order.filter((s) => s !== newId),
         groups: cur.groups.map((g) =>
-          g.id === target.id
-            ? { ...g, memberOrder: [...g.memberOrder, newId] }
-            : g,
+          g.id === groupId
+            ? { ...g, memberOrder: [...g.memberOrder.filter((id) => id !== newId), newId] }
+            : { ...g, memberOrder: g.memberOrder.filter((id) => id !== newId) },
         ),
       });
     },
@@ -785,8 +790,8 @@ export default function Sidebar({
   // fires once each. Sidebar-initiated shell/bind creations place directly in
   // their onCreated and never set this prop.
   useEffect(() => {
-    if (lastCreated) placeNewSession(lastCreated.id, lastCreated.originC3Id);
-  }, [lastCreated, placeNewSession]);
+    if (lastCreated) placeNewSessionInGroup(lastCreated.id, lastCreated.groupId);
+  }, [lastCreated, placeNewSessionInGroup]);
 
   // Reveal a group on request from the palette: expand it (if collapsed) then
   // scroll its header into view. Expand and scroll are split across a frame so
@@ -2558,17 +2563,20 @@ export default function Sidebar({
             drawer={false}
             initialMode={creatingMode}
             onCancel={() => setCreating(false)}
-            onCreated={(entry) => {
+            onCreated={(entry, groupId) => {
               setCreating(false);
-              // Inherit the active session's group before opening (onOpen
-              // changes the active session). activeC3Id is still the
-              // pre-create active row here since the form lives in the sidebar.
-              placeNewSession(entry.id, activeC3Id);
+              // Place into the dropdown's chosen group before opening (onOpen
+              // changes the active session). The dropdown default is the
+              // pre-create active row's group, so a no-change submit keeps the
+              // inherit behavior.
+              placeNewSessionInGroup(entry.id, groupId);
               onAfterMutate();
               // Auto-open the new entry's tab if it already has a uuid;
               // pending entries (uuid empty) will spawn-on-attach.
               onOpen(entry);
             }}
+            groups={layout.groups}
+            defaultGroupId={activeC3Id ? findGroupOf(activeC3Id)?.id ?? null : null}
             showToast={showToast}
             flashKey={inlineFlashKey}
           />
@@ -2581,12 +2589,14 @@ export default function Sidebar({
           drawer={true}
           initialMode={creatingMode}
           onCancel={() => setCreating(false)}
-          onCreated={(entry) => {
+          onCreated={(entry, groupId) => {
             setCreating(false);
-            placeNewSession(entry.id, activeC3Id);
+            placeNewSessionInGroup(entry.id, groupId);
             onAfterMutate();
             onOpen(entry);
           }}
+          groups={layout.groups}
+          defaultGroupId={activeC3Id ? findGroupOf(activeC3Id)?.id ?? null : null}
           showToast={showToast}
           flashKey={inlineFlashKey}
         />

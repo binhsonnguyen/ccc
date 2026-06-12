@@ -8,7 +8,9 @@ import {
   removeSession,
 } from '../lib/api';
 import { useShortcut } from '../lib/shortcuts';
+import type { SidebarGroup } from '../lib/sidebarLayout';
 import type { C3Entry, ClaudeSession } from '../types';
+import GroupSelect from './GroupSelect';
 
 interface Props {
   // drawer: render in modal mode (centered, focus trap, backdrop). Used
@@ -21,8 +23,14 @@ interface Props {
   initialMode?: Mode;
   onCancel: () => void;
   // onCreated fires after a successful POST /api/sessions or after a
-  // bind succeeds. Caller refreshes list and auto-opens a tab.
-  onCreated: (entry: C3Entry) => void;
+  // bind succeeds. Caller refreshes list and auto-opens a tab. groupId is
+  // the chosen sidebar group (null = ungrouped); for bind it stays at the
+  // default since that flow has no dropdown surface.
+  onCreated: (entry: C3Entry, groupId: string | null) => void;
+  // Sidebar groups for the dropdown + the default selection (the focused
+  // session's group).
+  groups: Pick<SidebarGroup, 'id' | 'name'>[];
+  defaultGroupId: string | null;
   showToast: (msg: string, opts?: { variant?: 'info' | 'error' | 'warning' | 'success' }) => void;
   // Bumped by Sidebar whenever the user re-clicks the kind icon whose
   // form is already open. Used as a key on a one-shot pulse overlay so
@@ -49,12 +57,15 @@ interface Cache {
 }
 let cache: Cache | null = null;
 
-export default function NewSessionForm({ drawer, initialMode, onCancel, onCreated, showToast, flashKey }: Props) {
+export default function NewSessionForm({ drawer, initialMode, onCancel, onCreated, groups, defaultGroupId, showToast, flashKey }: Props) {
   // Mode is fixed by the caller (sidebar icon click) — there's no in-form
   // mode switcher anymore, so this is intentionally a const-from-prop.
   const mode: Mode = initialMode ?? 'new';
   const [cwd, setCwd] = useState('');
   const [name, setName] = useState('');
+  // Group for the new session; seeded from the focused group, user-overridable
+  // via the dropdown (new/shell modes). Bind keeps the default.
+  const [groupId, setGroupId] = useState<string | null>(defaultGroupId);
   const [nameTouched, setNameTouched] = useState(false);
   const [cwds, setCwds] = useState<string[]>([]);
   const [unbound, setUnbound] = useState<ClaudeSession[]>([]);
@@ -150,7 +161,7 @@ export default function NewSessionForm({ drawer, initialMode, onCancel, onCreate
     setSubmitting(true);
     try {
       const entry = await createSession({ cwd: cwd.trim(), name: name.trim() });
-      onCreated(entry);
+      onCreated(entry, groupId);
     } catch (err) {
       if (err instanceof ApiError) {
         // Parse "validation failed: cwd: <reason>" form.
@@ -162,7 +173,7 @@ export default function NewSessionForm({ drawer, initialMode, onCancel, onCreate
     } finally {
       setSubmitting(false);
     }
-  }, [cwd, name, onCreated]);
+  }, [cwd, name, groupId, onCreated]);
 
   // submitShell posts {kind:'shell', cwd, name} — no firstPrompt, no
   // claudeUuid. Server validates cwd (absolute + existing dir) and
@@ -187,7 +198,7 @@ export default function NewSessionForm({ drawer, initialMode, onCancel, onCreate
         throw new ApiError(r.status, body);
       }
       const entry = (await r.json()) as C3Entry;
-      onCreated(entry);
+      onCreated(entry, groupId);
     } catch (err) {
       if (err instanceof ApiError) {
         const m = err.body.match(/^validation failed:\s*(.+)$/);
@@ -198,7 +209,7 @@ export default function NewSessionForm({ drawer, initialMode, onCancel, onCreate
     } finally {
       setSubmitting(false);
     }
-  }, [cwd, name, onCreated]);
+  }, [cwd, name, groupId, onCreated]);
 
   const chooseBind = useCallback(
     async (sess: ClaudeSession) => {
@@ -217,7 +228,7 @@ export default function NewSessionForm({ drawer, initialMode, onCancel, onCreate
         cache = null;
         createdId = null;
         setUuidQuery('');
-        onCreated(bound);
+        onCreated(bound, groupId);
       } catch (err) {
         // Rollback the pending entry created in the first step. We force
         // the delete (no PTY can be live for an entry that's existed for
@@ -254,7 +265,7 @@ export default function NewSessionForm({ drawer, initialMode, onCancel, onCreate
         setSubmitting(false);
       }
     },
-    [onCreated, showToast],
+    [groupId, onCreated, showToast],
   );
 
   const body = (
@@ -332,6 +343,7 @@ export default function NewSessionForm({ drawer, initialMode, onCancel, onCreate
               spellCheck={false}
             />
           </label>
+          <GroupSelect groups={groups} value={groupId} onChange={setGroupId} disabled={submitting} />
           {error && (
             <div className="newsession-error" role="alert">
               {error}
@@ -414,6 +426,7 @@ export default function NewSessionForm({ drawer, initialMode, onCancel, onCreate
               spellCheck={false}
             />
           </label>
+          <GroupSelect groups={groups} value={groupId} onChange={setGroupId} disabled={submitting} />
           {/* No prompt textarea for shell — by design. */}
           {error && (
             <div className="newsession-error" role="alert">

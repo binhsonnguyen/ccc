@@ -59,6 +59,13 @@ export function normalizeLayout(l: SidebarLayout): SidebarLayout {
   return { ...l, order };
 }
 
+// Group id a c3Id currently belongs to, or null when ungrouped. Used to seed
+// the new-session form's group dropdown with the focused session's group.
+export function findGroupIdOf(layout: SidebarLayout, c3Id: string): string | null {
+  if (!c3Id) return null;
+  return layout.groups.find((g) => g.memberOrder.includes(c3Id))?.id ?? null;
+}
+
 export function loadSidebarLayout(): SidebarLayout {
   try {
     const raw = localStorage.getItem(LS_KEY);

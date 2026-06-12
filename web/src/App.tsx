@@ -16,6 +16,7 @@ import {
   writeRowCap,
 } from './lib/caps';
 import { archiveSession, createSession, listSessions } from './lib/api';
+import { loadSidebarLayout, findGroupIdOf } from './lib/sidebarLayout';
 import { useShortcut } from './lib/shortcuts';
 import { disposeTerm, getTerm } from './lib/terminals';
 import { applyTheme, getCurrentTheme, type ThemeName } from './lib/themes';
@@ -166,11 +167,14 @@ function AppInner() {
   const [creatingSession, setCreatingSession] = useState(false);
   const [paneFlashKey, setPaneFlashKey] = useState(0);
   // c3Id of the session active when a creation was initiated. Captured here
-  // (startCreatingSession blanks activeTabId), then reported via lastCreated
-  // so the sidebar can drop the new session into the origin's group.
+  // (startCreatingSession blanks activeTabId), used to seed the new-session
+  // form's group dropdown with the focused session's group.
   const creationOriginRef = useRef<string | null>(null);
+  // Reported to the sidebar after a create so it places the new session into
+  // the chosen group (groupId; null = ungrouped). The form's default is the
+  // origin's group, so the implicit "inherit focused group" still holds.
   const [lastCreated, setLastCreated] =
-    useState<{ id: string; originC3Id: string | null } | null>(null);
+    useState<{ id: string; groupId: string | null } | null>(null);
   const startCreatingSession = useCallback(() => {
     creationOriginRef.current = activeC3IdRef.current;
     setCreatingSession((wasOpen) => {
@@ -751,7 +755,10 @@ function AppInner() {
           kind: kind === 'shell' ? 'shell' : undefined,
         });
         // Split session inherits the split origin pane's group in the sidebar.
-        setLastCreated({ id: entry.id, originC3Id: primaryPane(tab).c3Id });
+        setLastCreated({
+          id: entry.id,
+          groupId: findGroupIdOf(loadSidebarLayout(), primaryPane(tab).c3Id),
+        });
         setTabs((prev) =>
           prev.map((t) => {
             if (t.id !== activeTabId) return t;
@@ -909,6 +916,15 @@ function AppInner() {
   // focus (NewSessionPane prompt, palette, cheatsheet, dims dialog) so we
   // don't yank focus out from under those inputs.
   const overlayOpen = creatingSession || paletteOpen || cheatsheetOpen || dimsDialogOpen;
+
+  // Group dropdown data for the Claude new-session pane. Snapshotted from the
+  // sidebar layout only while the pane is open (avoids parsing localStorage on
+  // every unrelated re-render); default = the creation origin's group.
+  const creationLayout = creatingSession ? loadSidebarLayout() : null;
+  const creationGroups = creationLayout ? creationLayout.groups : [];
+  const creationDefaultGroupId = creationLayout
+    ? findGroupIdOf(creationLayout, creationOriginRef.current ?? '')
+    : null;
   useEffect(() => {
     if (!activeC3Id || overlayOpen) return;
     const uuid = activePane?.claudeUuid;
@@ -992,13 +1008,15 @@ function AppInner() {
           {creatingSession ? (
             <>
               <NewSessionPane
-                onCreated={(entry) => {
-                  setLastCreated({ id: entry.id, originC3Id: creationOriginRef.current });
+                onCreated={(entry, groupId) => {
+                  setLastCreated({ id: entry.id, groupId });
                   creationOriginRef.current = null;
                   openTab(entry);
                   setCreatingSession(false);
                 }}
                 onCancel={() => setCreatingSession(false)}
+                groups={creationGroups}
+                defaultGroupId={creationDefaultGroupId}
                 showToast={showToast}
                 flashKey={paneFlashKey}
               />

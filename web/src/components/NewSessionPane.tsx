@@ -1,13 +1,20 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError, createSession, listClaudeSessions } from '../lib/api';
 import { formatKeys } from '../lib/shortcuts';
+import type { SidebarGroup } from '../lib/sidebarLayout';
 import type { C3Entry, ClaudeSession } from '../types';
+import GroupSelect from './GroupSelect';
 
 interface Props {
   // onCreated fires after POST /api/sessions succeeds. App pushes a tab
-  // via its existing openTab path and closes this pane.
-  onCreated: (entry: C3Entry) => void;
+  // via its existing openTab path and closes this pane. groupId is the
+  // chosen sidebar group (null = ungrouped) for the new session.
+  onCreated: (entry: C3Entry, groupId: string | null) => void;
   onCancel: () => void;
+  // Sidebar groups for the dropdown + the default selection (the focused
+  // session's group), snapshotted by App when the pane opens.
+  groups: Pick<SidebarGroup, 'id' | 'name'>[];
+  defaultGroupId: string | null;
   showToast: (
     msg: string,
     opts?: { variant?: 'info' | 'error' | 'warning' | 'success' },
@@ -54,11 +61,14 @@ interface CwdCache {
 }
 let cwdCache: CwdCache | null = null;
 
-export default function NewSessionPane({ onCreated, onCancel, showToast, flashKey }: Props) {
+export default function NewSessionPane({ onCreated, onCancel, groups, defaultGroupId, showToast, flashKey }: Props) {
   const [cwd, setCwd] = useState('');
   const [name, setName] = useState('');
   const [nameTouched, setNameTouched] = useState(false);
   const [firstPrompt, setFirstPrompt] = useState('');
+  // Mounts fresh each time the pane opens, so seeding from the prop once is
+  // correct; the user can override via the dropdown.
+  const [groupId, setGroupId] = useState<string | null>(defaultGroupId);
   const [cwds, setCwds] = useState<string[]>([]);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -128,7 +138,7 @@ export default function NewSessionPane({ onCreated, onCancel, showToast, flashKe
         firstPrompt: prompt,
         claudeUuid: uuid,
       });
-      onCreated(entry);
+      onCreated(entry, groupId);
     } catch (err) {
       if (err instanceof ApiError) {
         const m = err.body.match(/^validation failed:\s*(.+)$/);
@@ -140,7 +150,7 @@ export default function NewSessionPane({ onCreated, onCancel, showToast, flashKe
     } finally {
       setSubmitting(false);
     }
-  }, [canSubmit, cwd, name, firstPrompt, onCreated, showToast]);
+  }, [canSubmit, cwd, name, firstPrompt, groupId, onCreated, showToast]);
 
   const onPromptKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // Cmd+Enter (macOS) / Ctrl+Enter (everywhere else) submits. Plain
@@ -240,6 +250,13 @@ export default function NewSessionPane({ onCreated, onCancel, showToast, flashKe
               disabled={submitting}
             />
           </label>
+
+          <GroupSelect
+            groups={groups}
+            value={groupId}
+            onChange={setGroupId}
+            disabled={submitting}
+          />
 
           <label className="field">
             <span className="field-label">
