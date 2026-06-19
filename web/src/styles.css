@@ -1931,6 +1931,71 @@ code {
   min-width: 160px;
   z-index: 50;
 }
+/* ---- provider (LLM backend) toggle ----------------------------------- */
+.statusbar-provider {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font: inherit;
+  cursor: pointer;
+  padding: 1px 4px;
+  border-radius: 4px;
+}
+.statusbar-provider:hover { color: var(--text); background: var(--overlay); }
+.statusbar-provider-glyph { font-size: 12px; line-height: 1; }
+.statusbar-provider-wrap { position: relative; }
+.statusbar-provider-menu {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  right: 0;
+  min-width: 240px;
+  z-index: 50;
+}
+.statusbar-provider-hint {
+  color: var(--text-faint);
+  font-size: var(--text-2xs);
+  padding: 2px 8px 4px;
+}
+.statusbar-provider-row { display: flex; flex-direction: column; }
+.statusbar-provider-tokchip { color: var(--text-faint); font-size: var(--text-2xs); }
+.statusbar-provider-token {
+  display: flex;
+  gap: 4px;
+  padding: 0 8px 6px 8px;
+}
+.statusbar-provider-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  background: var(--overlay);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-2xs);
+  font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+  padding: 3px 6px;
+}
+.statusbar-provider-save {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: var(--text-2xs);
+  cursor: pointer;
+  padding: 3px 8px;
+}
+.statusbar-provider-save:hover:not(:disabled) { color: var(--text); background: var(--overlay); }
+.statusbar-provider-save:disabled { color: var(--text-faint); cursor: not-allowed; }
+.statusbar-provider-err {
+  color: var(--danger);
+  font-size: var(--text-2xs);
+  padding: 4px 8px 2px;
+}
+
 .statusbar-left,
 .statusbar-center,
 .statusbar-right {

@@ -243,6 +243,47 @@ func setEnv(env []string, key, val string) []string {
 	return append(env, prefix+val)
 }
 
+// delEnv returns env with any assignment of key removed. No-op when absent.
+func delEnv(env []string, key string) []string {
+	prefix := key + "="
+	out := env[:0:0]
+	for _, kv := range env {
+		if strings.HasPrefix(kv, prefix) {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
+}
+
+// EnvOverlay, when set by the server, returns per-spawn environment
+// overrides applied on top of the resolved login-shell base for every PTY.
+// It is the injection point for the active LLM-provider profile
+// (ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN / model-mapping vars).
+//
+// Map semantics: a non-empty value sets KEY=value; an empty value UNSETS
+// KEY (so switching to a provider that doesn't define a var strips a stale
+// one inherited from the user's shell rc). Nil hook or empty map ⇒ no
+// overlay, i.e. the original thin-wrapper passthrough.
+//
+// Called fresh on every spawn (see childEnv) so a UI toggle takes effect on
+// the next session without a daemon restart. ptyrunner deliberately does
+// not import the provider package — the server wires this var — so this
+// adapter stays dependency-free.
+var EnvOverlay func() map[string]string
+
+// applyEnvOverlay applies the EnvOverlay map to env (see EnvOverlay docs).
+func applyEnvOverlay(env []string, overlay map[string]string) []string {
+	for k, v := range overlay {
+		if v == "" {
+			env = delEnv(env, k)
+		} else {
+			env = setEnv(env, k, v)
+		}
+	}
+	return env
+}
+
 // childEnv builds the environment for a spawned PTY child. It prefers the
 // resolved login-shell environment and degrades to os.Environ() when that
 // can't be obtained. Either way it then forces TERM (so claude picks the
@@ -253,7 +294,13 @@ func childEnv() []string {
 	if base == nil {
 		base = os.Environ()
 	}
-	return buildChildEnv(base)
+	env := buildChildEnv(base)
+	// Overlay the active provider profile last so it wins over both the
+	// login-shell env and the safety-net fixups. Read fresh each spawn.
+	if EnvOverlay != nil {
+		env = applyEnvOverlay(env, EnvOverlay())
+	}
+	return env
 }
 
 // buildChildEnv is the pure core of childEnv, split out for testing.

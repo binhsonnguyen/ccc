@@ -4,6 +4,7 @@ import { getTerm } from '../lib/terminals';
 import { THEME_NAMES, type ThemeName } from '../lib/themes';
 import { TAB_BAR_MODE_META, type TabBarMode } from '../lib/tabBarMode';
 import SplitMenu from './SplitMenu';
+import ProviderToggle from './ProviderToggle';
 import type { Pane, TabStatus } from '../types';
 
 interface Props {
@@ -216,6 +217,8 @@ export default function StatusBar({ activeTab, pulse, onCopyCwd, themeName, onTh
         <div className="statusbar-right">
           <SplitMenu canSplit={canSplit} onSplitActive={onSplitActive} />
           <span className="statusbar-sep" aria-hidden="true">·</span>
+          <ProviderToggle />
+          <span className="statusbar-sep" aria-hidden="true">·</span>
           <TabBarModeButton mode={tabBarMode} onChange={onTabBarModeChange} />
           <span className="statusbar-sep" aria-hidden="true">·</span>
           <ThemeToggle themeName={themeName} onThemeChange={onThemeChange} />
@@ -294,6 +297,8 @@ export default function StatusBar({ activeTab, pulse, onCopyCwd, themeName, onTh
         <kbd title="Command palette (coming soon)">
           {formatKeys('Mod+k')}
         </kbd>
+        <span className="statusbar-sep" aria-hidden="true">·</span>
+        <ProviderToggle />
         <span className="statusbar-sep" aria-hidden="true">·</span>
         <TabBarModeButton mode={tabBarMode} onChange={onTabBarModeChange} />
         <span className="statusbar-sep" aria-hidden="true">·</span>

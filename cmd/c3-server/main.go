@@ -32,8 +32,10 @@ import (
 
 	"github.com/binhsonnguyen/ccc/adapters/archivejson"
 	"github.com/binhsonnguyen/ccc/adapters/claudefs"
+	"github.com/binhsonnguyen/ccc/adapters/ptyrunner"
 	"github.com/binhsonnguyen/ccc/core"
 	"github.com/binhsonnguyen/ccc/core/usecase"
+	"github.com/binhsonnguyen/ccc/internal/provider"
 	"github.com/binhsonnguyen/ccc/internal/ptymgr"
 	"github.com/binhsonnguyen/ccc/internal/webdev"
 
@@ -41,10 +43,11 @@ import (
 )
 
 var (
-	store    = archivejson.New()
-	manager  = ptymgr.New()
-	claudeFS = claudefs.New()
-	webFS    = webdev.FS()
+	store     = archivejson.New()
+	manager   = ptymgr.New()
+	claudeFS  = claudefs.New()
+	webFS     = webdev.FS()
+	providers = provider.New()
 )
 
 // version is set at build time via -ldflags "-X main.version=…".
@@ -121,6 +124,12 @@ func run() error {
 	originHost := fmt.Sprintf("127.0.0.1:%d", port)
 	originHostAlt := fmt.Sprintf("localhost:%d", port)
 
+	// Inject the active LLM-provider profile (Anthropic / DeepSeek / …) into
+	// every spawned claude PTY. Read fresh per spawn inside ptyrunner, so a
+	// UI toggle applies to the next session without a daemon restart. A nil
+	// overlay (no active profile) is the original thin-wrapper passthrough.
+	ptyrunner.EnvOverlay = providers.Overlay
+
 	// Wire the discovery → bind hook BEFORE we accept any WS attach.
 	// When a pending session's uuid surfaces in claudefs, PATCH the c3
 	// entry so subsequent /api/sessions list reflects the link.
@@ -141,6 +150,8 @@ func run() error {
 	mux.HandleFunc("/api/claude-sessions", handleClaudeSessions)
 	mux.HandleFunc("/api/layout", handleLayout(originHost, originHostAlt))
 	mux.HandleFunc("/api/sidebar-layout", handleSidebarLayout(originHost, originHostAlt))
+	mux.HandleFunc("/api/providers", handleProviders(originHost, originHostAlt))
+	mux.HandleFunc("/api/providers/", handleProvidersSub(originHost, originHostAlt))
 	mux.HandleFunc("/assets/", handleAssets)
 	mux.HandleFunc("/", handleIndex)
 
@@ -1201,11 +1212,119 @@ func handleLayoutPut(w http.ResponseWriter, r *http.Request, pathFn func() (stri
 }
 
 // ---------------------------------------------------------------------------
+// Provider profiles (LLM backend switch + token storage)
+// ---------------------------------------------------------------------------
+
+// providerView is the per-profile JSON surfaced to the browser. The token is
+// NEVER included — only hasToken — so secrets.json never leaves the server.
+type providerView struct {
+	ID       string            `json:"id"`
+	Label    string            `json:"label"`
+	BaseURL  string            `json:"baseUrl"`
+	HasToken bool              `json:"hasToken"`
+	Env      map[string]string `json:"env,omitempty"`
+}
+
+// handleProviders serves GET /api/providers — the active id plus the ordered
+// profile list. Read-only; no CSRF guard needed.
+func handleProviders(originHost, originHostAlt string) http.HandlerFunc {
+	_ = originHost
+	_ = originHostAlt
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		cfg, err := providers.Load()
+		if err != nil {
+			httpError(w, err, http.StatusInternalServerError)
+			return
+		}
+		// Order: declared order first, then any profile not listed there.
+		seen := map[string]bool{}
+		var ids []string
+		for _, id := range cfg.Order {
+			if _, ok := cfg.Profiles[id]; ok && !seen[id] {
+				ids = append(ids, id)
+				seen[id] = true
+			}
+		}
+		for id := range cfg.Profiles {
+			if !seen[id] {
+				ids = append(ids, id)
+				seen[id] = true
+			}
+		}
+		views := make([]providerView, 0, len(ids))
+		for _, id := range ids {
+			p := cfg.Profiles[id]
+			has, _ := providers.HasToken(id)
+			views = append(views, providerView{
+				ID:       id,
+				Label:    p.Label,
+				BaseURL:  p.BaseURL,
+				HasToken: has,
+				Env:      p.Env,
+			})
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		writeJSON(w, map[string]any{"active": cfg.Active, "profiles": views})
+	}
+}
+
+// handleProvidersSub serves the mutating sub-routes (same-origin guarded):
+//   - PUT /api/providers/active  {"id": "deepseek"}   ("" ⇒ passthrough)
+//   - PUT /api/providers/token   {"id": "deepseek", "token": "sk-…"}
+func handleProvidersSub(originHost, originHostAlt string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if !checkSameOrigin(w, r, originHost, originHostAlt) {
+			return
+		}
+		sub := strings.TrimPrefix(r.URL.Path, "/api/providers/")
+		switch sub {
+		case "active":
+			var body struct {
+				ID string `json:"id"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, "invalid json: "+err.Error(), http.StatusBadRequest)
+				return
+			}
+			if err := providers.SetActive(body.ID); err != nil {
+				httpError(w, err, http.StatusBadRequest)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		case "token":
+			var body struct {
+				ID    string `json:"id"`
+				Token string `json:"token"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, "invalid json: "+err.Error(), http.StatusBadRequest)
+				return
+			}
+			if err := providers.SetToken(body.ID, body.Token); err != nil {
+				httpError(w, err, http.StatusBadRequest)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.Error(w, "not found", http.StatusNotFound)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
 // WS client adapter — implements ptymgr.Client over a coder/websocket conn.
 // ---------------------------------------------------------------------------
 
 type wsClient struct {
-	conn   *websocket.Conn
+	conn    *websocket.Conn
 	writeMu sync.Mutex // serialize writes; coder/websocket requires it
 	closed  bool
 }

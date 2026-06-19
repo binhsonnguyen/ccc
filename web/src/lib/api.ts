@@ -243,6 +243,57 @@ export async function putSidebarLayout(layout: unknown): Promise<void> {
   if (!r.ok) throw new Error(`PUT /api/sidebar-layout: ${r.status}`);
 }
 
+// ---------------------------------------------------------------------------
+// Provider profiles (LLM backend switch + token storage)
+// ---------------------------------------------------------------------------
+
+export interface ProviderProfile {
+  id: string;
+  label: string;
+  baseUrl: string;
+  // Whether a long-lived auth token is stored server-side. The token itself
+  // is never sent to the browser.
+  hasToken: boolean;
+  env?: Record<string, string>;
+}
+
+export interface ProvidersResponse {
+  // Active profile id; '' means passthrough (no env injection, the
+  // pre-feature behaviour).
+  active: string;
+  profiles: ProviderProfile[];
+}
+
+export async function getProviders(): Promise<ProvidersResponse> {
+  const r = await fetch('/api/providers');
+  if (!r.ok) throw await readError(r);
+  const j = await r.json();
+  return { active: j?.active ?? '', profiles: j?.profiles ?? [] };
+}
+
+// setActiveProvider switches the global active profile. Applies to sessions
+// started AFTER the call — running PTYs keep their spawn-time env. id '' is
+// passthrough.
+export async function setActiveProvider(id: string): Promise<void> {
+  const r = await fetch('/api/providers/active', {
+    method: 'PUT',
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ id }),
+  });
+  if (!r.ok) throw await readError(r);
+}
+
+// setProviderToken stores (token === '' clears) the long-lived auth token
+// for a profile. Write-only: the server never echoes it back.
+export async function setProviderToken(id: string, token: string): Promise<void> {
+  const r = await fetch('/api/providers/token', {
+    method: 'PUT',
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ id, token }),
+  });
+  if (!r.ok) throw await readError(r);
+}
+
 export function ptyWsURL(c3Id: string): string {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${proto}//${location.host}/api/sessions/${encodeURIComponent(c3Id)}/pty`;

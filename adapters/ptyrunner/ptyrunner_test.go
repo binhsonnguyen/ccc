@@ -261,3 +261,41 @@ func TestAugmentPath_NoDuplicates(t *testing.T) {
 		}
 	}
 }
+
+func TestApplyEnvOverlay_SetsAndDeletes(t *testing.T) {
+	base := []string{
+		"PATH=/usr/bin",
+		"ANTHROPIC_BASE_URL=https://stale.example",
+		"ANTHROPIC_MODEL=old",
+	}
+	out := applyEnvOverlay(base, map[string]string{
+		"ANTHROPIC_BASE_URL":   "https://api.deepseek.com/anthropic", // overwrite
+		"ANTHROPIC_AUTH_TOKEN": "sk-x",                               // add
+		"ANTHROPIC_MODEL":      "",                                   // delete
+	})
+	got := map[string]bool{}
+	for _, kv := range out {
+		got[kv] = true
+	}
+	if !got["ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic"] {
+		t.Error("base url not overwritten")
+	}
+	if !got["ANTHROPIC_AUTH_TOKEN=sk-x"] {
+		t.Error("token not added")
+	}
+	if !got["PATH=/usr/bin"] {
+		t.Error("unrelated var dropped")
+	}
+	for _, kv := range out {
+		if kv == "ANTHROPIC_MODEL=old" || kv == "ANTHROPIC_MODEL=" {
+			t.Errorf("ANTHROPIC_MODEL should be deleted, found %q", kv)
+		}
+	}
+}
+
+func TestApplyEnvOverlay_NilIsNoop(t *testing.T) {
+	base := []string{"PATH=/usr/bin"}
+	if out := applyEnvOverlay(base, nil); len(out) != 1 || out[0] != "PATH=/usr/bin" {
+		t.Errorf("nil overlay changed env: %v", out)
+	}
+}
