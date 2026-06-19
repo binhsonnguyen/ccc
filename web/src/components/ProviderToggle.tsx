@@ -6,6 +6,31 @@ import {
   type ProviderProfile,
 } from '../lib/api';
 
+// tokenPlaceholder / tokenHint tailor the token field to how each profile
+// authenticates (tokenEnv decides the HTTP header), so the user knows what
+// kind of credential to paste.
+function tokenPlaceholder(p: ProviderProfile): string {
+  const verb = p.hasToken ? 'replace' : 'paste';
+  switch (p.tokenEnv) {
+    case 'CLAUDE_CODE_OAUTH_TOKEN':
+      return `${verb} claude setup-token…`;
+    case 'ANTHROPIC_API_KEY':
+      return `${verb} sk-ant-… API key…`;
+    default:
+      return `${verb} auth token…`;
+  }
+}
+function tokenHint(p: ProviderProfile): string {
+  switch (p.tokenEnv) {
+    case 'CLAUDE_CODE_OAUTH_TOKEN':
+      return 'OAuth token from `claude setup-token` (uses your plan). Leave empty to use existing login.';
+    case 'ANTHROPIC_API_KEY':
+      return 'Console API key (x-api-key). Billed per use.';
+    default:
+      return `→ ${p.tokenEnv} (Bearer)`;
+  }
+}
+
 // ProviderToggle is the status-bar control for switching the active LLM
 // backend (Anthropic / DeepSeek / …) and storing each provider's long-lived
 // auth token. It mirrors ThemeToggle's upward popover pattern.
@@ -157,7 +182,7 @@ export default function ProviderToggle() {
                 <input
                   type="password"
                   className="statusbar-provider-input"
-                  placeholder={p.hasToken ? 'replace token…' : 'set auth token…'}
+                  placeholder={tokenPlaceholder(p)}
                   value={drafts[p.id] ?? ''}
                   autoComplete="off"
                   onChange={(e) =>
@@ -176,6 +201,7 @@ export default function ProviderToggle() {
                   {saved === p.id ? 'saved' : 'save'}
                 </button>
               </div>
+              <div className="statusbar-provider-tokenhint">{tokenHint(p)}</div>
             </div>
           ))}
           {err && <div className="statusbar-provider-err">{err}</div>}

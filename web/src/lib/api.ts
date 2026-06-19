@@ -251,6 +251,10 @@ export interface ProviderProfile {
   id: string;
   label: string;
   baseUrl: string;
+  // Env var the stored token is injected into — decides the auth header:
+  // ANTHROPIC_AUTH_TOKEN (Bearer, gateways), ANTHROPIC_API_KEY (x-api-key),
+  // or CLAUDE_CODE_OAUTH_TOKEN (claude setup-token).
+  tokenEnv: string;
   // Whether a long-lived auth token is stored server-side. The token itself
   // is never sent to the browser.
   hasToken: boolean;

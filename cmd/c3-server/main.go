@@ -1221,6 +1221,7 @@ type providerView struct {
 	ID       string            `json:"id"`
 	Label    string            `json:"label"`
 	BaseURL  string            `json:"baseUrl"`
+	TokenEnv string            `json:"tokenEnv"`
 	HasToken bool              `json:"hasToken"`
 	Env      map[string]string `json:"env,omitempty"`
 }
@@ -1263,6 +1264,7 @@ func handleProviders(originHost, originHostAlt string) http.HandlerFunc {
 				ID:       id,
 				Label:    p.Label,
 				BaseURL:  p.BaseURL,
+				TokenEnv: p.TokenEnvName(),
 				HasToken: has,
 				Env:      p.Env,
 			})

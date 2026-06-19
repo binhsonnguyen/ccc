@@ -35,12 +35,43 @@ import (
 // Profile is one provider configuration. Env holds the model-selection and
 // behaviour env vars (ANTHROPIC_MODEL, ANTHROPIC_DEFAULT_*_MODEL,
 // CLAUDE_CODE_SUBAGENT_MODEL, CLAUDE_CODE_EFFORT_LEVEL, …). The auth token is
-// NOT stored here — it lives in secrets.json and is injected as
-// ANTHROPIC_AUTH_TOKEN at overlay time.
+// NOT stored here — it lives in secrets.json and is injected at overlay time
+// into the env var named by TokenEnv.
+//
+// TokenEnv selects HOW the stored token authenticates, because Claude Code
+// sends different env vars over different HTTP headers:
+//   - ANTHROPIC_AUTH_TOKEN     → "Authorization: Bearer" (gateways: DeepSeek,
+//     any Anthropic-compatible proxy). This is the default when TokenEnv is "".
+//   - ANTHROPIC_API_KEY        → "x-api-key" (a standard console key against
+//     api.anthropic.com — a Bearer token would NOT authenticate there).
+//   - CLAUDE_CODE_OAUTH_TOKEN  → long-lived OAuth token from `claude
+//     setup-token` (uses the Pro/Max subscription, no per-call API billing).
 type Profile struct {
-	Label   string            `json:"label"`
-	BaseURL string            `json:"baseUrl"`
-	Env     map[string]string `json:"env,omitempty"`
+	Label    string            `json:"label"`
+	BaseURL  string            `json:"baseUrl"`
+	TokenEnv string            `json:"tokenEnv,omitempty"`
+	Env      map[string]string `json:"env,omitempty"`
+}
+
+// TokenEnvName returns the env var the profile's token is injected into,
+// defaulting to ANTHROPIC_AUTH_TOKEN (Bearer) for proxy/gateway providers.
+func (p Profile) TokenEnvName() string {
+	if p.TokenEnv != "" {
+		return p.TokenEnv
+	}
+	return "ANTHROPIC_AUTH_TOKEN"
+}
+
+// authEnvVars are the credential env vars Claude Code consults, in
+// descending precedence (AUTH_TOKEN and API_KEY both outrank
+// CLAUDE_CODE_OAUTH_TOKEN). The overlay clears ALL of them before setting the
+// active profile's chosen one — otherwise a higher-precedence var left in the
+// user's shell rc (e.g. a stray ANTHROPIC_API_KEY) would silently win over an
+// injected OAuth token.
+var authEnvVars = []string{
+	"ANTHROPIC_AUTH_TOKEN",
+	"ANTHROPIC_API_KEY",
+	"CLAUDE_CODE_OAUTH_TOKEN",
 }
 
 // Config is the persisted providers.json shape. Active is the id of the
@@ -92,7 +123,10 @@ func defaultConfig() *Config {
 			"anthropic": {
 				Label:   "Anthropic",
 				BaseURL: "",
-				Env:     map[string]string{},
+				// Token (if any) is a `claude setup-token` OAuth token. Leave
+				// it empty to just use the existing `claude login` session.
+				TokenEnv: "CLAUDE_CODE_OAUTH_TOKEN",
+				Env:      map[string]string{},
 			},
 			"deepseek": {
 				Label:   "DeepSeek",
@@ -245,13 +279,17 @@ func (s *Store) Overlay() map[string]string {
 		return nil
 	}
 
-	// Managed key set: the two specials plus every env key declared by ANY
-	// profile. These are the keys we own and will clear when not set.
-	managed := map[string]bool{
-		"ANTHROPIC_BASE_URL":   true,
-		"ANTHROPIC_AUTH_TOKEN": true,
+	// Managed key set: the base URL, every credential env var (so the active
+	// profile's auth wins over any higher-precedence one in the shell rc),
+	// every profile's chosen tokenEnv, and every env key declared by ANY
+	// profile. These are the keys we own and clear when the active profile
+	// doesn't set them.
+	managed := map[string]bool{"ANTHROPIC_BASE_URL": true}
+	for _, k := range authEnvVars {
+		managed[k] = true
 	}
 	for _, p := range c.Profiles {
+		managed[p.TokenEnvName()] = true
 		for k := range p.Env {
 			managed[k] = true
 		}
@@ -269,7 +307,7 @@ func (s *Store) Overlay() map[string]string {
 	}
 	if m, err := s.loadSecrets(); err == nil {
 		if tok := m[c.Active]; tok != "" {
-			out["ANTHROPIC_AUTH_TOKEN"] = tok
+			out[prof.TokenEnvName()] = tok
 		}
 	}
 	return out

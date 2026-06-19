@@ -68,6 +68,29 @@ func TestOverlay_AnthropicClearsDeepSeekKeys(t *testing.T) {
 	}
 }
 
+// The Anthropic profile injects its token as CLAUDE_CODE_OAUTH_TOKEN and must
+// strip the higher-precedence ANTHROPIC_AUTH_TOKEN / ANTHROPIC_API_KEY so the
+// OAuth token actually wins.
+func TestOverlay_AnthropicOAuthTokenAndStripsHigherPrecedence(t *testing.T) {
+	withTempData(t)
+	s := New()
+	if err := s.SetToken("anthropic", "oauth-xyz"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetActive("anthropic"); err != nil {
+		t.Fatal(err)
+	}
+	ov := s.Overlay()
+	if ov["CLAUDE_CODE_OAUTH_TOKEN"] != "oauth-xyz" {
+		t.Errorf("oauth token = %q, want oauth-xyz", ov["CLAUDE_CODE_OAUTH_TOKEN"])
+	}
+	for _, k := range []string{"ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"} {
+		if v, ok := ov[k]; !ok || v != "" {
+			t.Errorf("%s should be cleared (present, empty); got ok=%v v=%q", k, ok, v)
+		}
+	}
+}
+
 func TestSetToken_PersistsWith0600AndHasToken(t *testing.T) {
 	root := withTempData(t)
 	s := New()
