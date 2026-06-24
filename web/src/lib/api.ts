@@ -289,6 +289,40 @@ export async function setActiveEnvSets(active: string[]): Promise<void> {
   if (!r.ok) throw await readError(r);
 }
 
+// EnvVarDef is the editable shape of a var (no secret value — that's set
+// separately via setEnvSecret). Mirrors the server's envset.Var.
+export interface EnvVarDef {
+  key: string;
+  value?: string;
+  secret?: boolean;
+  unset?: boolean;
+}
+
+// upsertEnvSet creates or replaces a set's definition (label + vars). Secret
+// VALUES are managed separately via setEnvSecret — this only declares which
+// keys are secret.
+export async function upsertEnvSet(
+  id: string,
+  set: { label: string; vars: EnvVarDef[] },
+): Promise<void> {
+  const r = await fetch('/api/envsets', {
+    method: 'POST',
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ id, set }),
+  });
+  if (!r.ok) throw await readError(r);
+}
+
+// deleteEnvSet removes a set, its stored secrets, and its active/order
+// membership.
+export async function deleteEnvSet(id: string): Promise<void> {
+  const r = await fetch(`/api/envsets/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: JSON_HEADERS,
+  });
+  if (!r.ok) throw await readError(r);
+}
+
 // setEnvSecret stores (value === '' clears) a secret value for a set's key.
 // Write-only: the server never echoes it back.
 export async function setEnvSecret(set: string, key: string, value: string): Promise<void> {

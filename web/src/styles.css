@@ -2021,6 +2021,96 @@ code {
 }
 .envset-chip input { cursor: pointer; }
 
+/* ---- env sets editor dialog ------------------------------------------ */
+.btn.small { padding: 3px 8px; font-size: var(--text-xs); border-radius: 3px; }
+.btn.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, var(--border)); }
+.btn.danger:hover { background: color-mix(in srgb, var(--danger) 18%, transparent); }
+
+.envsets-dialog { width: min(720px, 92vw); }
+.envsets-dialog-body {
+  display: flex;
+  gap: 12px;
+  min-height: 280px;
+  max-height: 60vh;
+}
+.envsets-dialog-list {
+  flex: 0 0 150px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+  border-right: 1px solid var(--border);
+  padding-right: 8px;
+}
+.envsets-dialog-listitem {
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-sm);
+  padding: 5px 8px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.envsets-dialog-listitem:hover { background: var(--overlay); }
+.envsets-dialog-listitem.is-active { background: color-mix(in srgb, var(--accent) 20%, transparent); }
+.envsets-dialog-listitem.is-new { color: var(--text-dim); margin-top: 4px; }
+.envsets-dialog-editor {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.envsets-var-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: var(--text-xs);
+  color: var(--text-dim);
+  margin-top: 4px;
+}
+.envsets-var-rows { display: flex; flex-direction: column; gap: 5px; }
+.envsets-var-row { display: flex; align-items: center; gap: 5px; }
+.envsets-var-key { flex: 1 1 40%; min-width: 0; }
+.envsets-var-type { flex: 0 0 auto; }
+.envsets-var-val { flex: 1 1 50%; min-width: 0; }
+.envsets-var-row input,
+.envsets-var-row select {
+  background: var(--overlay);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-xs);
+  font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+  padding: 4px 6px;
+}
+.envsets-var-unset {
+  flex: 1 1 50%;
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+  font-style: italic;
+}
+.envsets-var-clear,
+.envsets-var-del {
+  flex: 0 0 auto;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: var(--text-2xs);
+  cursor: pointer;
+  padding: 3px 6px;
+}
+.envsets-var-clear:hover,
+.envsets-var-del:hover { color: var(--text); background: var(--overlay); }
+.envsets-dialog-actions { align-items: center; }
+.envsets-dialog-spacer { flex: 1 1 auto; }
+
 .statusbar-left,
 .statusbar-center,
 .statusbar-right {
