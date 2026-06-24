@@ -35,7 +35,7 @@ import (
 	"github.com/binhsonnguyen/ccc/adapters/ptyrunner"
 	"github.com/binhsonnguyen/ccc/core"
 	"github.com/binhsonnguyen/ccc/core/usecase"
-	"github.com/binhsonnguyen/ccc/internal/provider"
+	"github.com/binhsonnguyen/ccc/internal/envset"
 	"github.com/binhsonnguyen/ccc/internal/ptymgr"
 	"github.com/binhsonnguyen/ccc/internal/webdev"
 
@@ -43,11 +43,11 @@ import (
 )
 
 var (
-	store     = archivejson.New()
-	manager   = ptymgr.New()
-	claudeFS  = claudefs.New()
-	webFS     = webdev.FS()
-	providers = provider.New()
+	store    = archivejson.New()
+	manager  = ptymgr.New()
+	claudeFS = claudefs.New()
+	webFS    = webdev.FS()
+	envsets  = envset.New()
 )
 
 // version is set at build time via -ldflags "-X main.version=…".
@@ -124,11 +124,18 @@ func run() error {
 	originHost := fmt.Sprintf("127.0.0.1:%d", port)
 	originHostAlt := fmt.Sprintf("localhost:%d", port)
 
-	// Inject the active LLM-provider profile (Anthropic / DeepSeek / …) into
-	// every spawned claude PTY. Read fresh per spawn inside ptyrunner, so a
-	// UI toggle applies to the next session without a daemon restart. A nil
-	// overlay (no active profile) is the original thin-wrapper passthrough.
-	ptyrunner.EnvOverlay = providers.Overlay
+	// Best-effort one-time import from the older provider-switch files so a
+	// token the user already entered survives the upgrade. Safe to call every
+	// boot: it no-ops once envsets.json exists.
+	if err := envsets.Migrate(); err != nil {
+		fmt.Fprintf(os.Stderr, "c3-server: envset migrate: %v\n", err)
+	}
+
+	// Inject the globally-active env sets into every spawned PTY. Read fresh
+	// per spawn inside ptyrunner, so a UI toggle applies to the next session
+	// without a daemon restart. Per-session sets are layered on at attach (see
+	// handleSessionPTY). No active set ⇒ thin-wrapper passthrough.
+	ptyrunner.EnvOverlay = envsets.GlobalOverlay
 
 	// Wire the discovery → bind hook BEFORE we accept any WS attach.
 	// When a pending session's uuid surfaces in claudefs, PATCH the c3
@@ -150,8 +157,8 @@ func run() error {
 	mux.HandleFunc("/api/claude-sessions", handleClaudeSessions)
 	mux.HandleFunc("/api/layout", handleLayout(originHost, originHostAlt))
 	mux.HandleFunc("/api/sidebar-layout", handleSidebarLayout(originHost, originHostAlt))
-	mux.HandleFunc("/api/providers", handleProviders(originHost, originHostAlt))
-	mux.HandleFunc("/api/providers/", handleProvidersSub(originHost, originHostAlt))
+	mux.HandleFunc("/api/envsets", handleEnvSets(originHost, originHostAlt))
+	mux.HandleFunc("/api/envsets/", handleEnvSetsSub(originHost, originHostAlt))
 	mux.HandleFunc("/assets/", handleAssets)
 	mux.HandleFunc("/", handleIndex)
 
@@ -277,6 +284,7 @@ func handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		ClaudeUUID  string   `json:"claudeUuid"`
 		Kind        string   `json:"kind"`    // "" or "shell"
 		Command     []string `json:"command"` // shell-only argv override; nil ⇒ default
+		EnvSets     []string `json:"envSets"` // per-session env-set ids (claude + shell)
 		// commandPresent: was the JSON field actually present (true) or
 		// just absent / null (false)? Go's default decoder collapses both
 		// into nil so we can't tell empty-array from missing without a
@@ -330,6 +338,7 @@ func handleCreateSession(w http.ResponseWriter, r *http.Request) {
 			mapUsecaseError(w, err)
 			return
 		}
+		entry = applyEnvSets(entry, body.EnvSets)
 		// Stash the prompt BEFORE returning so a fast client (POST →
 		// immediate WS attach) finds it when Attach runs.
 		if entry.ClaudeUUID != "" && firstPrompt != "" {
@@ -348,6 +357,7 @@ func handleCreateSession(w http.ResponseWriter, r *http.Request) {
 			mapUsecaseError(w, err)
 			return
 		}
+		entry = applyEnvSets(entry, body.EnvSets)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(w).Encode(entry)
@@ -392,6 +402,29 @@ func createShellEntry(cwd, name string, argv []string) (core.C3Entry, error) {
 		return core.C3Entry{}, err
 	}
 	return created, nil
+}
+
+// applyEnvSets persists the per-session env-set ids onto a freshly-created
+// entry and returns the updated copy. Empty/nil ids are a no-op (the entry's
+// PTY then sees only the globally-active sets). Persist failure is non-fatal —
+// the session still works, just without its per-session overlay — so we log
+// and return the original entry rather than failing the create.
+func applyEnvSets(entry core.C3Entry, ids []string) core.C3Entry {
+	if len(ids) == 0 {
+		return entry
+	}
+	err := store.Mutate(func(f *core.ArchiveFile) error {
+		if e := f.Find(entry.ID); e != nil {
+			e.EnvSets = ids
+		}
+		return nil
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "c3-server: persist envSets for %s: %v\n", entry.ID, err)
+		return entry
+	}
+	entry.EnvSets = ids
+	return entry
 }
 
 // mapUsecaseError translates usecase sentinels into HTTP status codes.
@@ -893,16 +926,21 @@ func handleSessionPTY(w http.ResponseWriter, r *http.Request, id, originHost, or
 	conn.SetReadLimit(64 * 1024)
 
 	client := newWSClient(conn)
+	// Resolve this entry's per-session env sets to overlay ops, layered on top
+	// of the globally-active sets at spawn (see ptyrunner.applyEnvOps order).
+	sessionEnv := envsets.Resolve(e.EnvSets)
 	spec := ptymgr.SpawnSpec{
 		Kind:       "claude",
 		CWD:        e.CWD,
 		ClaudeUUID: e.ClaudeUUID,
+		Env:        sessionEnv,
 	}
 	if e.IsShell() {
 		spec = ptymgr.SpawnSpec{
 			Kind: "shell",
 			CWD:  e.CWD,
 			Argv: e.Command,
+			Env:  sessionEnv,
 		}
 	}
 	sess, err := manager.AttachSpec(sessionKey, spec, client)
@@ -1212,105 +1250,88 @@ func handleLayoutPut(w http.ResponseWriter, r *http.Request, pathFn func() (stri
 }
 
 // ---------------------------------------------------------------------------
-// Provider profiles (LLM backend switch + token storage)
+// Env sets (named env-var bundles: backend switch, secrets, per-session)
 // ---------------------------------------------------------------------------
 
-// providerView is the per-profile JSON surfaced to the browser. The token is
-// NEVER included — only hasToken — so secrets.json never leaves the server.
-type providerView struct {
-	ID       string            `json:"id"`
-	Label    string            `json:"label"`
-	BaseURL  string            `json:"baseUrl"`
-	TokenEnv string            `json:"tokenEnv"`
-	HasToken bool              `json:"hasToken"`
-	Env      map[string]string `json:"env,omitempty"`
-}
-
-// handleProviders serves GET /api/providers — the active id plus the ordered
-// profile list. Read-only; no CSRF guard needed.
-func handleProviders(originHost, originHostAlt string) http.HandlerFunc {
+// handleEnvSets serves GET /api/envsets — active set ids + ordered set list
+// with secret values masked. Read-only; no CSRF guard needed.
+func handleEnvSets(originHost, originHostAlt string) http.HandlerFunc {
 	_ = originHost
 	_ = originHostAlt
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		cfg, err := providers.Load()
-		if err != nil {
-			httpError(w, err, http.StatusInternalServerError)
-			return
-		}
-		// Order: declared order first, then any profile not listed there.
-		seen := map[string]bool{}
-		var ids []string
-		for _, id := range cfg.Order {
-			if _, ok := cfg.Profiles[id]; ok && !seen[id] {
-				ids = append(ids, id)
-				seen[id] = true
+		switch r.Method {
+		case http.MethodGet:
+			v, err := envsets.View()
+			if err != nil {
+				httpError(w, err, http.StatusInternalServerError)
+				return
 			}
-		}
-		for id := range cfg.Profiles {
-			if !seen[id] {
-				ids = append(ids, id)
-				seen[id] = true
+			w.Header().Set("Cache-Control", "no-store")
+			writeJSON(w, v)
+		case http.MethodPost:
+			if !checkSameOrigin(w, r, originHost, originHostAlt) {
+				return
 			}
-		}
-		views := make([]providerView, 0, len(ids))
-		for _, id := range ids {
-			p := cfg.Profiles[id]
-			has, _ := providers.HasToken(id)
-			views = append(views, providerView{
-				ID:       id,
-				Label:    p.Label,
-				BaseURL:  p.BaseURL,
-				TokenEnv: p.TokenEnvName(),
-				HasToken: has,
-				Env:      p.Env,
-			})
-		}
-		w.Header().Set("Cache-Control", "no-store")
-		writeJSON(w, map[string]any{"active": cfg.Active, "profiles": views})
-	}
-}
-
-// handleProvidersSub serves the mutating sub-routes (same-origin guarded):
-//   - PUT /api/providers/active  {"id": "deepseek"}   ("" ⇒ passthrough)
-//   - PUT /api/providers/token   {"id": "deepseek", "token": "sk-…"}
-func handleProvidersSub(originHost, originHostAlt string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPut {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		if !checkSameOrigin(w, r, originHost, originHostAlt) {
-			return
-		}
-		sub := strings.TrimPrefix(r.URL.Path, "/api/providers/")
-		switch sub {
-		case "active":
 			var body struct {
-				ID string `json:"id"`
+				ID  string     `json:"id"`
+				Set envset.Set `json:"set"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				http.Error(w, "invalid json: "+err.Error(), http.StatusBadRequest)
 				return
 			}
-			if err := providers.SetActive(body.ID); err != nil {
+			if err := envsets.UpsertSet(body.ID, body.Set); err != nil {
 				httpError(w, err, http.StatusBadRequest)
 				return
 			}
 			w.WriteHeader(http.StatusNoContent)
-		case "token":
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	}
+}
+
+// handleEnvSetsSub serves the mutating sub-routes (same-origin guarded):
+//   - PUT    /api/envsets/active  {"active": ["deepseek"]}
+//   - PUT    /api/envsets/secret  {"set": "deepseek", "key": "…", "value": "…"}
+//   - DELETE /api/envsets/<id>
+func handleEnvSetsSub(originHost, originHostAlt string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !checkSameOrigin(w, r, originHost, originHostAlt) {
+			return
+		}
+		sub := strings.TrimPrefix(r.URL.Path, "/api/envsets/")
+		switch {
+		case sub == "active" && r.Method == http.MethodPut:
 			var body struct {
-				ID    string `json:"id"`
-				Token string `json:"token"`
+				Active []string `json:"active"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				http.Error(w, "invalid json: "+err.Error(), http.StatusBadRequest)
 				return
 			}
-			if err := providers.SetToken(body.ID, body.Token); err != nil {
+			if err := envsets.SetActive(body.Active); err != nil {
+				httpError(w, err, http.StatusBadRequest)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		case sub == "secret" && r.Method == http.MethodPut:
+			var body struct {
+				Set   string `json:"set"`
+				Key   string `json:"key"`
+				Value string `json:"value"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, "invalid json: "+err.Error(), http.StatusBadRequest)
+				return
+			}
+			if err := envsets.SetSecret(body.Set, body.Key, body.Value); err != nil {
+				httpError(w, err, http.StatusBadRequest)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		case sub != "" && sub != "active" && sub != "secret" && r.Method == http.MethodDelete:
+			if err := envsets.DeleteSet(sub); err != nil {
 				httpError(w, err, http.StatusBadRequest)
 				return
 			}

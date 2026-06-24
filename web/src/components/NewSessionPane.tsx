@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ApiError, createSession, listClaudeSessions } from '../lib/api';
+import {
+  ApiError,
+  createSession,
+  getEnvSets,
+  listClaudeSessions,
+  type EnvSetView,
+} from '../lib/api';
 import { formatKeys } from '../lib/shortcuts';
 import type { SidebarGroup } from '../lib/sidebarLayout';
 import type { C3Entry, ClaudeSession } from '../types';
@@ -69,6 +75,10 @@ export default function NewSessionPane({ onCreated, onCancel, groups, defaultGro
   // Mounts fresh each time the pane opens, so seeding from the prop once is
   // correct; the user can override via the dropdown.
   const [groupId, setGroupId] = useState<string | null>(defaultGroupId);
+  // Per-session env sets layered on top of the globally-active ones for this
+  // session only. Defaults to none (global sets still apply).
+  const [envSetOptions, setEnvSetOptions] = useState<EnvSetView[]>([]);
+  const [selectedEnvSets, setSelectedEnvSets] = useState<string[]>([]);
   const [cwds, setCwds] = useState<string[]>([]);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -87,6 +97,22 @@ export default function NewSessionPane({ onCreated, onCancel, groups, defaultGro
   // is the high-value field.
   useEffect(() => {
     promptRef.current?.focus();
+  }, []);
+
+  // Load available env sets for the per-session picker. Best-effort: an
+  // empty list just hides the picker.
+  useEffect(() => {
+    let cancelled = false;
+    getEnvSets()
+      .then((r) => {
+        if (!cancelled) setEnvSetOptions(r.sets);
+      })
+      .catch(() => {
+        if (!cancelled) setEnvSetOptions([]);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Load cwd suggestions. Same shape as NewSessionForm; we don't share
@@ -137,6 +163,7 @@ export default function NewSessionPane({ onCreated, onCancel, groups, defaultGro
         name: name.trim(),
         firstPrompt: prompt,
         claudeUuid: uuid,
+        envSets: selectedEnvSets,
       });
       onCreated(entry, groupId);
     } catch (err) {
@@ -150,7 +177,13 @@ export default function NewSessionPane({ onCreated, onCancel, groups, defaultGro
     } finally {
       setSubmitting(false);
     }
-  }, [canSubmit, cwd, name, firstPrompt, groupId, onCreated, showToast]);
+  }, [canSubmit, cwd, name, firstPrompt, groupId, selectedEnvSets, onCreated, showToast]);
+
+  const toggleEnvSet = (id: string) => {
+    setSelectedEnvSets((cur) =>
+      cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id],
+    );
+  };
 
   const onPromptKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // Cmd+Enter (macOS) / Ctrl+Enter (everywhere else) submits. Plain
@@ -257,6 +290,27 @@ export default function NewSessionPane({ onCreated, onCancel, groups, defaultGro
             onChange={setGroupId}
             disabled={submitting}
           />
+
+          {envSetOptions.length > 0 && (
+            <div className="field">
+              <span className="field-label">
+                env sets <span className="field-label-hint">(optional)</span>
+              </span>
+              <div className="envset-picker">
+                {envSetOptions.map((s) => (
+                  <label key={s.id} className="envset-chip">
+                    <input
+                      type="checkbox"
+                      checked={selectedEnvSets.includes(s.id)}
+                      onChange={() => toggleEnvSet(s.id)}
+                      disabled={submitting}
+                    />
+                    {s.label || s.id}
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
 
           <label className="field">
             <span className="field-label">

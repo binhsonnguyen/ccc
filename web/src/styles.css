@@ -1931,11 +1931,15 @@ code {
   min-width: 160px;
   z-index: 50;
 }
-/* ---- provider (LLM backend) toggle ----------------------------------- */
-.statusbar-provider {
+/* ---- env sets (backend switch + secrets) ----------------------------- */
+.statusbar-envsets {
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  max-width: 220px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   background: transparent;
   border: none;
   color: var(--text-dim);
@@ -1944,35 +1948,35 @@ code {
   padding: 1px 4px;
   border-radius: 4px;
 }
-.statusbar-provider:hover { color: var(--text); background: var(--overlay); }
-.statusbar-provider-glyph { font-size: 12px; line-height: 1; }
-.statusbar-provider-wrap { position: relative; }
-.statusbar-provider-menu {
+.statusbar-envsets:hover { color: var(--text); background: var(--overlay); }
+.statusbar-envsets-glyph { font-size: 12px; line-height: 1; }
+.statusbar-envsets-wrap { position: relative; }
+.statusbar-envsets-menu {
   position: absolute;
   bottom: calc(100% + 6px);
   right: 0;
-  min-width: 240px;
+  min-width: 260px;
+  max-height: 60vh;
+  overflow-y: auto;
   z-index: 50;
 }
-.statusbar-provider-hint {
+.statusbar-envsets-hint {
   color: var(--text-faint);
   font-size: var(--text-2xs);
   padding: 2px 8px 4px;
-}
-.statusbar-provider-row { display: flex; flex-direction: column; }
-.statusbar-provider-tokchip { color: var(--text-faint); font-size: var(--text-2xs); }
-.statusbar-provider-tokenhint {
-  color: var(--text-faint);
-  font-size: var(--text-2xs);
-  padding: 0 8px 6px 8px;
   line-height: 1.3;
 }
-.statusbar-provider-token {
-  display: flex;
-  gap: 4px;
-  padding: 0 8px 6px 8px;
+.statusbar-envsets-row { display: flex; flex-direction: column; }
+.statusbar-envsets-chip { color: var(--text-faint); font-size: var(--text-2xs); }
+.statusbar-envsets-secret { padding: 0 8px 6px 16px; }
+.statusbar-envsets-secretkey {
+  color: var(--text-dim);
+  font-size: var(--text-2xs);
+  font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+  padding: 1px 0 2px;
 }
-.statusbar-provider-input {
+.statusbar-envsets-secretrow { display: flex; gap: 4px; }
+.statusbar-envsets-input {
   flex: 1 1 auto;
   min-width: 0;
   background: var(--overlay);
@@ -1984,7 +1988,7 @@ code {
   font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
   padding: 3px 6px;
 }
-.statusbar-provider-save {
+.statusbar-envsets-save {
   background: transparent;
   border: 1px solid var(--border);
   border-radius: 3px;
@@ -1994,13 +1998,28 @@ code {
   cursor: pointer;
   padding: 3px 8px;
 }
-.statusbar-provider-save:hover:not(:disabled) { color: var(--text); background: var(--overlay); }
-.statusbar-provider-save:disabled { color: var(--text-faint); cursor: not-allowed; }
-.statusbar-provider-err {
+.statusbar-envsets-save:hover:not(:disabled) { color: var(--text); background: var(--overlay); }
+.statusbar-envsets-save:disabled { color: var(--text-faint); cursor: not-allowed; }
+.statusbar-envsets-err {
   color: var(--danger);
   font-size: var(--text-2xs);
   padding: 4px 8px 2px;
 }
+/* Per-session env-set picker in the new-session form. */
+.envset-picker { display: flex; flex-wrap: wrap; gap: 6px; }
+.envset-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--text-xs);
+  color: var(--text);
+  background: var(--overlay);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+.envset-chip input { cursor: pointer; }
 
 .statusbar-left,
 .statusbar-center,

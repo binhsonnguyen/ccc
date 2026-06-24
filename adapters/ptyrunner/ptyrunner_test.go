@@ -71,7 +71,7 @@ func TestStartShell_DoesNotCreateClaudeJSONL(t *testing.T) {
 	// argv = nil → default ($SHELL or /bin/bash -i). We force /bin/sh so
 	// the test doesn't depend on the developer's login shell being
 	// installed under HOME=tmp.
-	sess, err := StartShell(cwd, []string{"/bin/sh", "-c", "echo hello"})
+	sess, err := StartShell(cwd, []string{"/bin/sh", "-c", "echo hello"}, nil)
 	if err != nil {
 		t.Skipf("StartShell unavailable in this environment: %v", err)
 		return
@@ -262,16 +262,16 @@ func TestAugmentPath_NoDuplicates(t *testing.T) {
 	}
 }
 
-func TestApplyEnvOverlay_SetsAndDeletes(t *testing.T) {
+func TestApplyEnvOps_SetsAndDeletes(t *testing.T) {
 	base := []string{
 		"PATH=/usr/bin",
 		"ANTHROPIC_BASE_URL=https://stale.example",
 		"ANTHROPIC_MODEL=old",
 	}
-	out := applyEnvOverlay(base, map[string]string{
-		"ANTHROPIC_BASE_URL":   "https://api.deepseek.com/anthropic", // overwrite
-		"ANTHROPIC_AUTH_TOKEN": "sk-x",                               // add
-		"ANTHROPIC_MODEL":      "",                                   // delete
+	out := applyEnvOps(base, []EnvOp{
+		{Key: "ANTHROPIC_BASE_URL", Value: "https://api.deepseek.com/anthropic"}, // overwrite
+		{Key: "ANTHROPIC_AUTH_TOKEN", Value: "sk-x"},                             // add
+		{Key: "ANTHROPIC_MODEL", Unset: true},                                    // delete
 	})
 	got := map[string]bool{}
 	for _, kv := range out {
@@ -293,9 +293,21 @@ func TestApplyEnvOverlay_SetsAndDeletes(t *testing.T) {
 	}
 }
 
-func TestApplyEnvOverlay_NilIsNoop(t *testing.T) {
+// Later ops win over earlier ones — the layering contract (global then
+// per-session).
+func TestApplyEnvOps_LaterWins(t *testing.T) {
+	out := applyEnvOps([]string{"K=base"}, []EnvOp{
+		{Key: "K", Value: "global"},
+		{Key: "K", Value: "session"},
+	})
+	if len(out) != 1 || out[0] != "K=session" {
+		t.Errorf("later op should win, got %v", out)
+	}
+}
+
+func TestApplyEnvOps_NilIsNoop(t *testing.T) {
 	base := []string{"PATH=/usr/bin"}
-	if out := applyEnvOverlay(base, nil); len(out) != 1 || out[0] != "PATH=/usr/bin" {
+	if out := applyEnvOps(base, nil); len(out) != 1 || out[0] != "PATH=/usr/bin" {
 		t.Errorf("nil overlay changed env: %v", out)
 	}
 }

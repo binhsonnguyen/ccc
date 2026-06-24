@@ -42,6 +42,10 @@ type C3Entry struct {
 	// at write time so the field stays "nil = default, set = use". Ignored
 	// for claude entries.
 	Command []string `json:"command,omitempty"`
+	// EnvSets are the env-set ids layered onto this session's PTY at spawn
+	// (on top of the globally-active sets). Empty ⇒ global sets only. Applies
+	// to both claude and shell entries; resolved by the server at attach time.
+	EnvSets []string `json:"envSets,omitempty"`
 }
 
 // IsShell reports whether this entry is a plain shell (vs. a claude session).

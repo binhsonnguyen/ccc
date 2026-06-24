@@ -15,6 +15,9 @@ export interface C3Entry {
   // means a plain $SHELL -i tab — no claudeUuid, no transcript, no
   // discovery handshake.
   kind?: 'claude' | 'shell';
+  // envSets: per-session env-set ids layered onto this session's PTY (on top
+  // of the globally-active sets). Absent/empty ⇒ global sets only.
+  envSets?: string[];
 }
 
 // Claude session record returned by GET /api/claude-sessions in the

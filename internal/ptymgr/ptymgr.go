@@ -155,13 +155,13 @@ type Manager struct {
 	// firstPrompt is non-empty only on the inline first-prompt flow
 	// (client POST included firstPrompt + claudeUuid). The runner forwards
 	// it to claude as a positional arg so the TUI pre-fills + auto-submits.
-	startPTY func(cwd, uuid, firstPrompt string) (*ptyrunner.Session, error)
+	startPTY func(cwd, uuid, firstPrompt string, extra []ptyrunner.EnvOp) (*ptyrunner.Session, error)
 
 	// startShell is the function used to spawn a plain shell PTY. argv ==
 	// nil means "default $SHELL -i" (caller responsibility to validate
 	// non-empty when set). Production code uses ptyrunner.StartShell;
 	// tests swap in a stub.
-	startShell func(cwd string, argv []string) (*ptyrunner.Session, error)
+	startShell func(cwd string, argv []string, extra []ptyrunner.EnvOp) (*ptyrunner.Session, error)
 
 	// claudeScan is the claudefs scanner used by the discovery loop.
 	// Tests swap in a fake that returns synthetic sessions.
@@ -193,11 +193,15 @@ func New() *Manager {
 //   - "shell": start a plain shell (argv override or $SHELL -i); discovery
 //     loop NEVER runs, pending control frame is NEVER sent.
 type SpawnSpec struct {
-	Kind        string   // "" | "claude" | "shell"
+	Kind        string // "" | "claude" | "shell"
 	CWD         string
 	ClaudeUUID  string   // claude only
 	FirstPrompt string   // claude only
 	Argv        []string // shell only; nil ⇒ default
+	// Env is this session's resolved per-session env-set overlay, layered on
+	// top of the global overlay at spawn. The server resolves the entry's set
+	// ids to ops before building the spec; ptymgr just forwards it.
+	Env []ptyrunner.EnvOp
 }
 
 func (s SpawnSpec) isShell() bool { return s.Kind == "shell" }
@@ -491,9 +495,9 @@ func (m *Manager) AttachSpec(key string, spec SpawnSpec, c Client) (*Session, er
 			err error
 		)
 		if spec.isShell() {
-			p, err = m.startShell(spec.CWD, spec.Argv)
+			p, err = m.startShell(spec.CWD, spec.Argv, spec.Env)
 		} else {
-			p, err = m.startPTY(spec.CWD, spec.ClaudeUUID, firstPrompt)
+			p, err = m.startPTY(spec.CWD, spec.ClaudeUUID, firstPrompt, spec.Env)
 		}
 		if err != nil {
 			m.mu.Unlock()

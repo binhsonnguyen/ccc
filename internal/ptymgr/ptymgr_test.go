@@ -181,9 +181,10 @@ func skipIfNoPTY(t *testing.T) {
 // newFakePTYStarter returns a ptymgr startPTY-compatible func that
 // launches the given command name + args inside a pty. Used by tests
 // to inject `cat`, `sleep`, `echo` etc. in place of the real `claude`.
-func newFakePTYStarter(name string, args ...string) func(cwd, uuid, firstPrompt string) (*ptyrunner.Session, error) {
-	return func(cwd, uuid, firstPrompt string) (*ptyrunner.Session, error) {
+func newFakePTYStarter(name string, args ...string) func(cwd, uuid, firstPrompt string, extra []ptyrunner.EnvOp) (*ptyrunner.Session, error) {
+	return func(cwd, uuid, firstPrompt string, extra []ptyrunner.EnvOp) (*ptyrunner.Session, error) {
 		_ = firstPrompt // intentionally unused — fakes don't exec claude
+		_ = extra
 
 		cmd := exec.Command(name, args...)
 		if cwd != "" {
@@ -630,8 +631,8 @@ func TestAttach_ResumedNoPendingFrame(t *testing.T) {
 // it returns a startShell-compatible func that runs the given command in
 // a pty. Tests use `cat` so the child stays alive without needing a real
 // shell binary.
-func newFakeShellStarter(name string, args ...string) func(cwd string, argv []string) (*ptyrunner.Session, error) {
-	return func(cwd string, _ []string) (*ptyrunner.Session, error) {
+func newFakeShellStarter(name string, args ...string) func(cwd string, argv []string, extra []ptyrunner.EnvOp) (*ptyrunner.Session, error) {
+	return func(cwd string, _ []string, _ []ptyrunner.EnvOp) (*ptyrunner.Session, error) {
 		cmd := exec.Command(name, args...)
 		if cwd != "" {
 			cmd.Dir = cwd

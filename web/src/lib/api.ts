@@ -83,6 +83,9 @@ interface CreateSessionOpts {
   claudeUuid?: string;
   // kind: 'claude' (default, omitted) or 'shell'.
   kind?: 'claude' | 'shell';
+  // Per-session env-set ids layered onto this session's PTY (on top of the
+  // globally-active sets). Omitted/empty ⇒ global sets only.
+  envSets?: string[];
 }
 
 export async function createSession(opts: CreateSessionOpts): Promise<C3Entry> {
@@ -93,6 +96,7 @@ export async function createSession(opts: CreateSessionOpts): Promise<C3Entry> {
     claudeUuid: opts.claudeUuid ?? '',
   };
   if (opts.kind) body.kind = opts.kind;
+  if (opts.envSets && opts.envSets.length) body.envSets = opts.envSets;
   const r = await fetch('/api/sessions', {
     method: 'POST',
     headers: JSON_HEADERS,
@@ -244,56 +248,54 @@ export async function putSidebarLayout(layout: unknown): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Provider profiles (LLM backend switch + token storage)
+// Env sets (named env-var bundles: backend switch, secrets, per-session)
 // ---------------------------------------------------------------------------
 
-export interface ProviderProfile {
+export interface EnvVarView {
+  key: string;
+  value: string; // blank for secret vars
+  secret: boolean;
+  unset: boolean;
+  hasValue: boolean; // for secret vars: whether a value is stored
+}
+
+export interface EnvSetView {
   id: string;
   label: string;
-  baseUrl: string;
-  // Env var the stored token is injected into — decides the auth header:
-  // ANTHROPIC_AUTH_TOKEN (Bearer, gateways), ANTHROPIC_API_KEY (x-api-key),
-  // or CLAUDE_CODE_OAUTH_TOKEN (claude setup-token).
-  tokenEnv: string;
-  // Whether a long-lived auth token is stored server-side. The token itself
-  // is never sent to the browser.
-  hasToken: boolean;
-  env?: Record<string, string>;
+  vars: EnvVarView[];
 }
 
-export interface ProvidersResponse {
-  // Active profile id; '' means passthrough (no env injection, the
-  // pre-feature behaviour).
-  active: string;
-  profiles: ProviderProfile[];
+export interface EnvSetsResponse {
+  // Globally-active set ids, in apply order. Empty ⇒ passthrough.
+  active: string[];
+  sets: EnvSetView[];
 }
 
-export async function getProviders(): Promise<ProvidersResponse> {
-  const r = await fetch('/api/providers');
+export async function getEnvSets(): Promise<EnvSetsResponse> {
+  const r = await fetch('/api/envsets');
   if (!r.ok) throw await readError(r);
   const j = await r.json();
-  return { active: j?.active ?? '', profiles: j?.profiles ?? [] };
+  return { active: j?.active ?? [], sets: j?.sets ?? [] };
 }
 
-// setActiveProvider switches the global active profile. Applies to sessions
-// started AFTER the call — running PTYs keep their spawn-time env. id '' is
-// passthrough.
-export async function setActiveProvider(id: string): Promise<void> {
-  const r = await fetch('/api/providers/active', {
+// setActiveEnvSets replaces the globally-active set list. Applies to sessions
+// started AFTER the call — running PTYs keep their spawn-time env.
+export async function setActiveEnvSets(active: string[]): Promise<void> {
+  const r = await fetch('/api/envsets/active', {
     method: 'PUT',
     headers: JSON_HEADERS,
-    body: JSON.stringify({ id }),
+    body: JSON.stringify({ active }),
   });
   if (!r.ok) throw await readError(r);
 }
 
-// setProviderToken stores (token === '' clears) the long-lived auth token
-// for a profile. Write-only: the server never echoes it back.
-export async function setProviderToken(id: string, token: string): Promise<void> {
-  const r = await fetch('/api/providers/token', {
+// setEnvSecret stores (value === '' clears) a secret value for a set's key.
+// Write-only: the server never echoes it back.
+export async function setEnvSecret(set: string, key: string, value: string): Promise<void> {
+  const r = await fetch('/api/envsets/secret', {
     method: 'PUT',
     headers: JSON_HEADERS,
-    body: JSON.stringify({ id, token }),
+    body: JSON.stringify({ set, key, value }),
   });
   if (!r.ok) throw await readError(r);
 }

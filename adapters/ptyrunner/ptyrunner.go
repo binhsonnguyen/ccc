@@ -256,29 +256,35 @@ func delEnv(env []string, key string) []string {
 	return out
 }
 
-// EnvOverlay, when set by the server, returns per-spawn environment
-// overrides applied on top of the resolved login-shell base for every PTY.
-// It is the injection point for the active LLM-provider profile
-// (ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN / model-mapping vars).
-//
-// Map semantics: a non-empty value sets KEY=value; an empty value UNSETS
-// KEY (so switching to a provider that doesn't define a var strips a stale
-// one inherited from the user's shell rc). Nil hook or empty map ⇒ no
-// overlay, i.e. the original thin-wrapper passthrough.
+// EnvOp is one environment mutation: set Key=Value, or (when Unset) remove
+// Key from the child env entirely. Ordered slices of EnvOp let a later op
+// override an earlier one — that's how layered env sets (global, then
+// per-session) compose deterministically.
+type EnvOp struct {
+	Key   string
+	Value string
+	Unset bool
+}
+
+// EnvOverlay, when set by the server, returns the GLOBAL env-set overlay
+// applied on top of the resolved login-shell base for every PTY. It is the
+// injection point for whichever env sets the user has marked active
+// (ANTHROPIC_BASE_URL / auth token / model-mapping vars / arbitrary vars).
 //
 // Called fresh on every spawn (see childEnv) so a UI toggle takes effect on
-// the next session without a daemon restart. ptyrunner deliberately does
-// not import the provider package — the server wires this var — so this
-// adapter stays dependency-free.
-var EnvOverlay func() map[string]string
+// the next session without a daemon restart. ptyrunner deliberately does not
+// import the env-set package — the server wires this var — so this adapter
+// stays dependency-free. Per-session sets are passed separately as the
+// `extra` arg to Start / StartShell and applied AFTER the global overlay.
+var EnvOverlay func() []EnvOp
 
-// applyEnvOverlay applies the EnvOverlay map to env (see EnvOverlay docs).
-func applyEnvOverlay(env []string, overlay map[string]string) []string {
-	for k, v := range overlay {
-		if v == "" {
-			env = delEnv(env, k)
+// applyEnvOps applies ops to env in order (set or unset per op).
+func applyEnvOps(env []string, ops []EnvOp) []string {
+	for _, op := range ops {
+		if op.Unset {
+			env = delEnv(env, op.Key)
 		} else {
-			env = setEnv(env, k, v)
+			env = setEnv(env, op.Key, op.Value)
 		}
 	}
 	return env
@@ -295,10 +301,10 @@ func childEnv() []string {
 		base = os.Environ()
 	}
 	env := buildChildEnv(base)
-	// Overlay the active provider profile last so it wins over both the
+	// Overlay the active GLOBAL env sets last so they win over both the
 	// login-shell env and the safety-net fixups. Read fresh each spawn.
 	if EnvOverlay != nil {
-		env = applyEnvOverlay(env, EnvOverlay())
+		env = applyEnvOps(env, EnvOverlay())
 	}
 	return env
 }
@@ -335,7 +341,7 @@ type Session struct {
 // pseudo-terminal. TERM=xterm-256color so claude picks the truecolor TUI
 // path. Initial size is a sane default; the server will Resize() once the
 // browser reports its viewport.
-func Start(cwd, uuid, firstPrompt string) (*Session, error) {
+func Start(cwd, uuid, firstPrompt string, extra []EnvOp) (*Session, error) {
 	claudePath, err := resolveClaude()
 	if err != nil {
 		return nil, fmt.Errorf("ptyrunner: %w", err)
@@ -365,9 +371,10 @@ func Start(cwd, uuid, firstPrompt string) (*Session, error) {
 	}
 	cmd.Dir = cwd
 	// Base the child env on the user's resolved login-shell environment
-	// (full PATH, locale, tool-manager vars), with TERM forced and the
-	// PATH/locale safety nets applied. See childEnv / loginShellEnv.
-	cmd.Env = childEnv()
+	// (full PATH, locale, tool-manager vars), with TERM forced, the
+	// PATH/locale safety nets + global env sets applied, then this session's
+	// own env sets (extra) layered on top. See childEnv / loginShellEnv.
+	cmd.Env = applyEnvOps(childEnv(), extra)
 
 	master, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 24, Cols: 80})
 	if err != nil {
@@ -394,7 +401,7 @@ func Start(cwd, uuid, firstPrompt string) (*Session, error) {
 // IMPORTANT: this path must NOT write anything under ~/.claude/projects.
 // We don't touch claudefs from here and we don't pass --session-id to
 // anything; verified by TestStartShell_DoesNotCreateClaudeJSONL.
-func StartShell(cwd string, argv []string) (*Session, error) {
+func StartShell(cwd string, argv []string, extra []EnvOp) (*Session, error) {
 	if argv == nil {
 		sh := os.Getenv("SHELL")
 		if sh == "" {
@@ -411,10 +418,11 @@ func StartShell(cwd string, argv []string) (*Session, error) {
 	}
 	cmd := exec.Command(bin, argv[1:]...)
 	cmd.Dir = cwd
-	// Same resolved-login-shell base as Start. The shell will re-source
-	// its init files on top (harmless: exports are idempotent), but now
-	// it starts from a complete env instead of launchd's stripped one.
-	cmd.Env = childEnv()
+	// Same resolved-login-shell base as Start, plus global + per-session env
+	// sets. The shell will re-source its init files on top (harmless: exports
+	// are idempotent), but now it starts from a complete env instead of
+	// launchd's stripped one.
+	cmd.Env = applyEnvOps(childEnv(), extra)
 
 	master, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 24, Cols: 80})
 	if err != nil {
