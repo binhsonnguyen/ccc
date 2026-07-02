@@ -22,11 +22,18 @@ all stays in `~/.claude/projects/**`. You can stop using c3 and
 **Homebrew (macOS):**
 
 ```sh
-brew install binhsonnguyen/tap/c3
+brew install --cask binhsonnguyen/tap/c3
 ```
 
 (c3 ships as a Homebrew **cask**, which Homebrew only supports on macOS.
 On Linux, install from source / the release tarball — see below.)
+
+> **Upgrading from an older install?** c3 used to ship as a Homebrew
+> *formula*. If a stale formula is still around, `brew install` can pick
+> it up instead of the cask and leave you with a half-broken mix (the old
+> `brew services` works but the new `c3` function / `c3 service` don't).
+> Remove the old one first — see [Uninstall](#uninstall) — then install
+> the cask with the `--cask` command above.
 
 Then enable the `c3` command in your shell rc:
 
@@ -84,6 +91,45 @@ where multiple checkouts shouldn't fight over one address. Either
 way, `C3_SERVER_PORT=NNNN` overrides; `=0` forces random. `c3 gui`
 discovers the running server through `~/.local/share/c3/server.port`,
 so the port number doesn't matter for the CLI flow.
+
+## Uninstall
+
+First stop the background server (if you started one) and drop the shell
+wrapper line (`eval "$(c3-bin shell-init zsh)"`) from your `~/.zshrc` /
+`~/.bashrc` / fish config:
+
+```sh
+c3 service stop         # tears down the LaunchAgent / systemd unit
+```
+
+Then remove the binaries by however you installed:
+
+**Homebrew — new cask:**
+
+```sh
+brew uninstall --cask --zap binhsonnguyen/tap/c3
+```
+
+`--zap` also removes the LaunchAgent plist and c3's state dirs
+(`~/.local/share/c3`, `~/.local/state/c3`).
+
+**Homebrew — old formula** (only if you have the pre-cask install):
+
+```sh
+brew uninstall c3
+```
+
+**Install script / from source** (binaries live in `~/.local/bin`):
+
+```sh
+rm -f ~/.local/bin/c3-bin ~/.local/bin/c3-server
+rm -rf ~/.local/share/c3 ~/.local/state/c3
+rm -f ~/Library/LaunchAgents/com.c3.server.plist          # macOS
+rm -f ~/.config/systemd/user/com.c3.server.service        # Linux
+```
+
+Your Claude sessions in `~/.claude/projects/**` are never touched —
+`claude --resume <uuid>` keeps working after c3 is gone.
 
 ## CLI cheatsheet
 
