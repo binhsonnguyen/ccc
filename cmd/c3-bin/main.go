@@ -46,8 +46,8 @@ Usage:
 Environment:
   C3_NO_WRAPPER=1     also echo eval'd command to stderr
   C3_SERVER_PORT=N    c3-server listen port (default 7755; 0 = random)
-  C3_SERVER_IDLE_MINUTES=N  shut server down after N min idle (default 15,
-                            0 = off; "c3 service" forces 0)
+  C3_SERVER_IDLE_MINUTES=N  shut server down after N min idle (default 0
+                            = off; "c3 service" forces 0)
 `
 
 var store = archivejson.New()

@@ -1430,17 +1430,18 @@ var _ = core.C3Entry{}
 // long enough not to busy-loop.
 const idleCheckInterval = 30 * time.Second
 
-// idleTimeoutFromEnv reads C3_SERVER_IDLE_MINUTES. Default 15 minutes,
-// 0 disables the watchdog.
+// idleTimeoutFromEnv reads C3_SERVER_IDLE_MINUTES. Default 0 (watchdog
+// disabled — server stays up until stopped); a positive value shuts the
+// server down after that many minutes idle.
 func idleTimeoutFromEnv() time.Duration {
 	v := os.Getenv("C3_SERVER_IDLE_MINUTES")
 	if v == "" {
-		return 15 * time.Minute
+		return 0
 	}
 	n, err := strconv.Atoi(strings.TrimSpace(v))
 	if err != nil || n < 0 {
 		fmt.Fprintf(os.Stderr, "c3-server: warn: invalid C3_SERVER_IDLE_MINUTES=%q, using default\n", v)
-		return 15 * time.Minute
+		return 0
 	}
 	return time.Duration(n) * time.Minute
 }

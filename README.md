@@ -186,7 +186,7 @@ on reboot, so no explicit cleanup is needed.
 | Var | Default | Effect |
 |---|---|---|
 | `C3_SERVER_PORT` | `7755` (installed) / random (source) | listen port; `0` = random |
-| `C3_SERVER_IDLE_MINUTES` | `15` | auto-shutdown after idle; `0` disables |
+| `C3_SERVER_IDLE_MINUTES` | `0` | auto-shutdown after N min idle; `0` disables |
 | `C3_NO_WRAPPER` | unset | CLI also echoes the eval'd command to stderr |
 | `ccc:mention-regex` (localStorage) | `Error\|TODO\|FIXME` | regex matched against background-tab PTY output for the mention badge |
 
